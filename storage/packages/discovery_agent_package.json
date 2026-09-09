@@ -1,0 +1,117 @@
+{
+  "package": {
+    "package_type": "agent_context",
+    "package_version": "1.0",
+    "target_agent": "planning.discovery_agent",
+    "generated_at": "2026-09-09T15:43:03.065402+00:00"
+  },
+  "context": {
+    "sources": [
+      {
+        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "source_type": "jira",
+        "source_name": "Jira project KAN",
+        "connection_identifier": null,
+        "metadata": {
+          "project_key": "KAN"
+        },
+        "status": "active"
+      }
+    ],
+    "artifact_count": 3,
+    "artifacts": [
+      {
+        "artifact_id": "f816f2a7-794b-4880-b902-f5554e1d8d8c",
+        "artifact_type": "candidate_work_item",
+        "title": "Task 2",
+        "content": "Task 2",
+        "source": {
+          "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+          "source_type": "jira",
+          "source_name": "Jira project KAN",
+          "source_ref": "KAN-2"
+        },
+        "metadata": {
+          "cwi_id": "cwi-jira-KAN-2",
+          "status": "In Progress",
+          "signal_type": "feature_request",
+          "source_type": "jira",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-08T06:37:24.089000+00:00",
+        "updated_at": "2026-09-08T06:37:24.358000+00:00"
+      },
+      {
+        "artifact_id": "5b82f23c-932f-4527-b962-c930ad5c7674",
+        "artifact_type": "candidate_work_item",
+        "title": "Subtask 2.1",
+        "content": "Subtask 2.1",
+        "source": {
+          "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+          "source_type": "jira",
+          "source_name": "Jira project KAN",
+          "source_ref": "KAN-3"
+        },
+        "metadata": {
+          "cwi_id": "cwi-jira-KAN-3",
+          "status": "To Do",
+          "signal_type": "feature_request",
+          "source_type": "jira",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-08T06:37:24.530000+00:00",
+        "updated_at": "2026-09-08T06:37:24.864000+00:00"
+      },
+      {
+        "artifact_id": "f94011f3-2e42-4d5b-81ad-38eb3e99478c",
+        "artifact_type": "candidate_work_item",
+        "title": "to fix login page error",
+        "content": "the login page gives error even if user entwers correct email ",
+        "source": {
+          "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+          "source_type": "jira",
+          "source_name": "Jira project KAN",
+          "source_ref": "KAN-1"
+        },
+        "metadata": {
+          "cwi_id": "cwi-jira-KAN-1",
+          "status": "To Do",
+          "signal_type": "feature_request",
+          "source_type": "jira",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-08T06:37:23.538000+00:00",
+        "updated_at": "2026-09-08T06:49:20.222000+00:00"
+      }
+    ],
+    "provenance": [
+      {
+        "artifact_id": "f94011f3-2e42-4d5b-81ad-38eb3e99478c",
+        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "source_ref": "KAN-1",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-09-09T15:07:30.563652+00:00"
+      },
+      {
+        "artifact_id": "5b82f23c-932f-4527-b962-c930ad5c7674",
+        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "source_ref": "KAN-3",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-09-09T15:07:30.589306+00:00"
+      },
+      {
+        "artifact_id": "f816f2a7-794b-4880-b902-f5554e1d8d8c",
+        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "source_ref": "KAN-2",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-09-09T15:07:30.607802+00:00"
+      }
+    ]
+  }
+}

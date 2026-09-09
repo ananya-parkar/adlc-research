@@ -1,3 +1,4 @@
+# auth.py
 """
 Auth is kept separate from the connector itself. Right now only
 ApiTokenAuth exists (Basic Auth with email + token). When you're

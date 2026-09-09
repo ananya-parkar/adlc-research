@@ -1,3 +1,4 @@
+# sync_state.py
 """
 Tracks the last successful sync timestamp per source, so a connector
 can do incremental fetches (only new/updated items) instead of

@@ -1,3 +1,4 @@
+# connectors/jira_connector.py
 """
 Jira Cloud connector implementing the standard SourceConnector
 interface. Handles auth (via an injected AuthProvider, so OAuth can
@@ -15,7 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from auth import AuthProvider
-from base_connector import SourceConnector
+from connectors.base_connector import SourceConnector
 
 logger = logging.getLogger(__name__)
 

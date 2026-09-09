@@ -1,0 +1,54 @@
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: adlc-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    ports:
+      - "${POSTGRES_PORT}:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./storage/postgres/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: adlc-app
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    volumes:
+      - .:/app
+
+    working_dir: /app
+
+    command: python store_cwis.py
+
+
+volumes:
+  postgres_data:
