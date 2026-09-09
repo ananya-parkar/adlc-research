@@ -1,0 +1,4 @@
+.env
+cwis.json
+sync_state.json
+__pycache__/
