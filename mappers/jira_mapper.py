@@ -1,3 +1,4 @@
+# mappers/jira_mapper.py
 """
 Maps a raw Jira issue payload into the MVP Candidate Work Item (CWI)
 schema used across the Planning phase.
@@ -6,6 +7,7 @@ Discovery Agent stays "thin" here: it identifies and links signals,
 it doesn't try to write a polished summary. That's Spec Synthesizer's
 job downstream.
 """
+
 
 from typing import Any, Dict, List
 

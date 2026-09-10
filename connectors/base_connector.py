@@ -1,3 +1,4 @@
+# connectors/base_connector.py
 """
 Standard interface every source connector (Jira, Confluence, ADO, ...)
 implements. Keeping this abstract means Discovery Agent's orchestration

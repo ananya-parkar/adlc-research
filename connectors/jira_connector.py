@@ -1,3 +1,4 @@
+# connectors/jira_connector.py
 """
 Jira Cloud connector implementing the standard SourceConnector
 interface. Handles auth (via an injected AuthProvider, so OAuth can
