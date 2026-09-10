@@ -53,6 +53,7 @@ def map_issue_to_cwi(issue: Dict[str, Any]) -> Dict[str, Any]:
         "source_type": "jira",
         "source_refs": [key],
         "signal_type": classify_signal_type(fields.get("issuetype", {}).get("name", "")),
+        "needs_review": False,  # Jira tickets are already actionable work items
         "affected_component": components[0] if components else None,
         "status": fields.get("status", {}).get("name"),
         "first_seen": fields.get("created"),

@@ -15,7 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from auth import AuthProvider
-from base_connector import SourceConnector
+from connectors.base_connector import SourceConnector
 
 logger = logging.getLogger(__name__)
 

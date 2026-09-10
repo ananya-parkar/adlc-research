@@ -1,11 +1,12 @@
 """
-Run this to sync issues from Jira into local CWI storage.
+Run this to sync pages from a Confluence space into local CWI storage.
+Adds to the same cwis.json used by store_cwis.py (Jira) — CWIs from
+different sources coexist in one pool, distinguished by their
+cwi_id prefix (cwi-jira-*, cwi-confluence-*).
 
 Usage:
-    cp .env.example .env
-    pip install -r requirements.txt
-    python store_cwis.py              # incremental sync (only changed issues)
-    python store_cwis.py --full       # full sync (ignores last-sync timestamp)
+    python store_confluence.py              # incremental sync
+    python store_confluence.py --full        # full sync
 """
 
 import argparse
@@ -19,8 +20,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from auth import ApiTokenAuth  # noqa: E402
-from mappers.jira_mapper import map_issue_to_cwi  # noqa: E402
-from connectors.jira_connector import JiraConnector  # noqa: E402
+from connectors.confluence_connector import ConfluenceConnector  # noqa: E402
+from mappers.confluence_mapper import map_page_to_cwi  # noqa: E402
 from sync_state import get_last_sync, set_last_sync  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -41,21 +42,21 @@ def save(cwis_by_id: dict) -> None:
     OUTPUT_PATH.write_text(json.dumps(cwis_by_id, indent=2, default=str))
 
 
-def build_connector() -> JiraConnector:
+def build_connector() -> ConfluenceConnector:
     auth = ApiTokenAuth(
-        email=os.environ["JIRA_EMAIL"],
+        email=os.environ["JIRA_EMAIL"],       # same Atlassian login as Jira
         api_token=os.environ["JIRA_API_TOKEN"],
     )
-    return JiraConnector(
-        base_url=os.environ["JIRA_URL"],
+    return ConfluenceConnector(
+        base_url=os.environ["JIRA_URL"],      # same site, Confluence lives under /wiki
         auth=auth,
-        project_key=os.environ.get("JIRA_PROJECT_KEY", "PROJ"),
+        space_key=os.environ["CONFLUENCE_SPACE_KEY"],
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--full", action="store_true", help="Ignore last-sync state, fetch everything")
+    parser.add_argument("--full", action="store_true")
     args = parser.parse_args()
 
     connector = build_connector()
@@ -64,7 +65,7 @@ def main() -> None:
         logger.error("Connection test failed — check your .env credentials")
         return
 
-    sync_key = f"jira:{connector.project_key}"
+    sync_key = f"confluence:{connector.space_key}"
     since = None if args.full else get_last_sync(sync_key)
     logger.info("Syncing since: %s", since or "(full sync)")
 
@@ -72,8 +73,8 @@ def main() -> None:
     new_count = 0
     updated_count = 0
 
-    for issue in connector.fetch_items(since=since):
-        cwi = map_issue_to_cwi(issue)
+    for page in connector.fetch_items(since=since):
+        cwi = map_page_to_cwi(page)
         cwi_id = cwi["cwi_id"]
         if cwi_id in cwis_by_id:
             updated_count += 1
@@ -85,8 +86,8 @@ def main() -> None:
     set_last_sync(sync_key)
 
     logger.info(
-        "Done. %d new CWIs, %d updated. Total: %d. Saved to %s",
-        new_count, updated_count, len(cwis_by_id), OUTPUT_PATH,
+        "Done. %d new CWIs, %d updated. Total in cwis.json: %d",
+        new_count, updated_count, len(cwis_by_id),
     )
 
 
