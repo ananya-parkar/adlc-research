@@ -35,6 +35,7 @@ from auth import ApiTokenAuth  # noqa: E402
 from mappers.jira_mapper import map_issue_to_cwi  # noqa: E402
 from connectors.jira_connector import JiraConnector  # noqa: E402
 from sync_state import get_last_sync, set_last_sync  # noqa: E402
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)

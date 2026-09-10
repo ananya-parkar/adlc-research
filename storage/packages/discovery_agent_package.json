@@ -3,7 +3,7 @@
     "package_type": "agent_context",
     "package_version": "1.0",
     "target_agent": "planning.discovery_agent",
-    "generated_at": "2026-09-09T15:43:03.065402+00:00"
+    "generated_at": "2026-09-10T07:37:51.934760+00:00"
   },
   "context": {
     "sources": [
@@ -16,9 +16,19 @@
           "project_key": "KAN"
         },
         "status": "active"
+      },
+      {
+        "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+        "source_type": "confluence",
+        "source_name": "Confluence space AD",
+        "connection_identifier": null,
+        "metadata": {
+          "space_key": "AD"
+        },
+        "status": "active"
       }
     ],
-    "artifact_count": 3,
+    "artifact_count": 8,
     "artifacts": [
       {
         "artifact_id": "f816f2a7-794b-4880-b902-f5554e1d8d8c",
@@ -85,6 +95,116 @@
         "version": 3,
         "created_at": "2026-09-08T06:37:23.538000+00:00",
         "updated_at": "2026-09-08T06:49:20.222000+00:00"
+      },
+      {
+        "artifact_id": "221a5867-ba5e-4010-aeb6-ea2cc5022f5e",
+        "artifact_type": "candidate_work_item",
+        "title": "Template - Project plan",
+        "content": "Driver @ mention the driver Approver @ approver Contributors @ contributors Informed @ stakeholders Objective Summarize the objective in 1-2 sentences Due date Type // to add a date Key outcomes List expected outcomes and success metrics Status not started / in progress Yellow / complete Green &nbsp;Problem statement Describe the problem and its impact. Include the hypothesis that's driving your work (&quot;We think X will do Y, and we'll know we've succeeded if Z&quot;). &nbsp;Scope Must have: ",
+        "source": {
+          "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393343"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-393343",
+          "status": "current",
+          "signal_type": "context",
+          "source_type": "confluence",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-09T06:48:25.478000+00:00",
+        "updated_at": "2026-09-09T06:48:25.478000+00:00"
+      },
+      {
+        "artifact_id": "086e3553-2b0c-44e6-adaa-234a239c0b1e",
+        "artifact_type": "candidate_work_item",
+        "title": "Template - Decision documentation",
+        "content": "Status Not started / In progress Yellow / Complete Green Impact High Red / Medium Yellow / Low Green Driver @ mention driver Approver @ approver Contributors @ contributors Informed @ stakeholders Due date Type // to add a date Resources Type /link to add links to relevant research, pages, and related decisions &nbsp;Background Provide context on a decision the team needs to make and include information about constraints and challenges. &nbsp;Relevant data Add any data or feedback the team shoul",
+        "source": {
+          "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393356"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-393356",
+          "status": "current",
+          "signal_type": "context",
+          "source_type": "confluence",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-09T06:48:25.517000+00:00",
+        "updated_at": "2026-09-09T06:48:25.517000+00:00"
+      },
+      {
+        "artifact_id": "210698a4-99d7-498f-9baf-6d98a128685d",
+        "artifact_type": "candidate_work_item",
+        "title": "Template - Meeting notes",
+        "content": "&nbsp;Date &nbsp;Participants Type @ name to mention a person and add them as a meeting attendee - they will be notified &nbsp;Goals List goals for this meeting (e.g., Set design priorities for FY27) &nbsp;Brainstorm Type /whiteboard to create an interactive canvas for icebreakers, brainstorms, diagramming, retros, and more &nbsp;Discussion topics Time Topic Presenter Notes @ mention teammate Add notes for each discussion topic &nbsp;Action items incomplete &nbsp;Decisions Type /decision to reco",
+        "source": {
+          "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393369"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-393369",
+          "status": "current",
+          "signal_type": "context",
+          "source_type": "confluence",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-09T06:48:25.572000+00:00",
+        "updated_at": "2026-09-09T06:48:25.572000+00:00"
+      },
+      {
+        "artifact_id": "12eba2ce-c20d-4e89-b571-8f0df0de113c",
+        "artifact_type": "candidate_work_item",
+        "title": "ADLC DOCS",
+        "content": "Description #F4F5F7 In a sentence or two, describe the purpose of this space. Project Tracker com.atlassian.confluence.project-linker project-linker default 3781a39a-e79f-41c1-a914-38846c22a77c Recently updated content This list below will automatically update each time somebody in your space creates or updates content. page,whiteboard,database,blog 10 concise true Contributors This list below will automatically update each time somebody in your space creates or updates content. descendants 10",
+        "source": {
+          "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393329"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-393329",
+          "status": "current",
+          "signal_type": "context",
+          "source_type": "confluence",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-09T06:48:25.616000+00:00",
+        "updated_at": "2026-09-09T06:48:25.616000+00:00"
+      },
+      {
+        "artifact_id": "25d2a6c3-9873-46cf-9aaa-15e95419bf44",
+        "artifact_type": "candidate_work_item",
+        "title": "ADLC OVERVIEW",
+        "content": "TO AUTOMATE SDLC BY LEVERAGING AI",
+        "source": {
+          "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "327682"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-327682",
+          "status": "current",
+          "signal_type": "context",
+          "source_type": "confluence",
+          "affected_component": null
+        },
+        "version": 3,
+        "created_at": "2026-09-09T06:50:41.984000+00:00",
+        "updated_at": "2026-09-09T06:50:41.984000+00:00"
       }
     ],
     "provenance": [
@@ -111,6 +231,46 @@
         "extraction_method": "jira_connector",
         "metadata": {},
         "created_at": "2026-09-09T15:07:30.607802+00:00"
+      },
+      {
+        "artifact_id": "25d2a6c3-9873-46cf-9aaa-15e95419bf44",
+        "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+        "source_ref": "327682",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-09-10T07:32:40.860455+00:00"
+      },
+      {
+        "artifact_id": "12eba2ce-c20d-4e89-b571-8f0df0de113c",
+        "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+        "source_ref": "393329",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-09-10T07:32:40.935852+00:00"
+      },
+      {
+        "artifact_id": "221a5867-ba5e-4010-aeb6-ea2cc5022f5e",
+        "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+        "source_ref": "393343",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-09-10T07:32:40.993771+00:00"
+      },
+      {
+        "artifact_id": "086e3553-2b0c-44e6-adaa-234a239c0b1e",
+        "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+        "source_ref": "393356",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-09-10T07:32:41.068740+00:00"
+      },
+      {
+        "artifact_id": "210698a4-99d7-498f-9baf-6d98a128685d",
+        "source_id": "efe89483-d259-4e0d-ae91-0cd654cda764",
+        "source_ref": "393369",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-09-10T07:32:41.132774+00:00"
       }
     ]
   }
