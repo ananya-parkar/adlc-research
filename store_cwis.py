@@ -1,5 +1,12 @@
 # store_cwis.py
 """
+Run this to sync issues from Jira into local CWI storage.
+
+Usage:
+    cp .env.example .env
+    pip install -r requirements.txt
+    python store_cwis.py              # incremental sync (only changed issues)
+    python store_cwis.py --full       # full sync (ignores last-sync timestamp)
 End-to-end ingestion flow:
 
 Jira
@@ -24,6 +31,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from auth import ApiTokenAuth  # noqa: E402
+from mappers.jira_mapper import map_issue_to_cwi  # noqa: E402
+from connectors.jira_connector import JiraConnector  # noqa: E402
+from sync_state import get_last_sync, set_last_sync  # noqa: E402
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+STORAGE_DIR = Path(__file__).parent / "storage"
+STORAGE_DIR.mkdir(exist_ok=True)
+OUTPUT_PATH = STORAGE_DIR / "cwis.json"
 from auth import ApiTokenAuth
 from connectors.jira_connector import JiraConnector
 from mappers.jira_mapper import map_issue_to_cwi

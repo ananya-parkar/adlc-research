@@ -13,8 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-STATE_PATH = Path(__file__).parent / "sync_state.json"
-
+STATE_PATH = Path(__file__).parent / "storage" / "sync_state.json"
 
 def get_last_sync(source_key: str) -> Optional[datetime]:
     if not STATE_PATH.exists():
