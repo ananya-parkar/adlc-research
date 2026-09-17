@@ -3,30 +3,41 @@
     "package_type": "agent_context",
     "package_version": "1.0",
     "target_agent": "planning.discovery_agent",
-    "generated_at": "2026-09-09T15:43:03.065402+00:00"
+    "generated_at": "2026-09-17T12:03:52.964460+00:00"
   },
   "context": {
     "sources": [
       {
-        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
         "source_type": "jira",
         "source_name": "Jira project KAN",
         "connection_identifier": null,
         "metadata": {
+          "project_id": "KAN",
           "project_key": "KAN"
+        },
+        "status": "active"
+      },
+      {
+        "source_id": "ef7a8efb-edf8-4bf1-9f75-8d831ffda196",
+        "source_type": "file_upload",
+        "source_name": "uploads:KAN",
+        "connection_identifier": null,
+        "metadata": {
+          "project_id": "KAN"
         },
         "status": "active"
       }
     ],
-    "artifact_count": 3,
+    "artifact_count": 7,
     "artifacts": [
       {
-        "artifact_id": "f816f2a7-794b-4880-b902-f5554e1d8d8c",
-        "artifact_type": "candidate_work_item",
+        "artifact_id": "8d31733b-f34b-44bc-bfc1-fa06a3203ee3",
+        "artifact_type": "source_artifact",
         "title": "Task 2",
         "content": "Task 2",
         "source": {
-          "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-2"
@@ -34,21 +45,22 @@
         "metadata": {
           "cwi_id": "cwi-jira-KAN-2",
           "status": "In Progress",
+          "project_id": "KAN",
           "signal_type": "feature_request",
           "source_type": "jira",
           "affected_component": null
         },
-        "version": 3,
+        "version": 1,
         "created_at": "2026-09-08T06:37:24.089000+00:00",
         "updated_at": "2026-09-08T06:37:24.358000+00:00"
       },
       {
-        "artifact_id": "5b82f23c-932f-4527-b962-c930ad5c7674",
-        "artifact_type": "candidate_work_item",
+        "artifact_id": "cb25ea2d-b57e-409c-9a4b-5886678b4417",
+        "artifact_type": "source_artifact",
         "title": "Subtask 2.1",
         "content": "Subtask 2.1",
         "source": {
-          "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-3"
@@ -56,21 +68,22 @@
         "metadata": {
           "cwi_id": "cwi-jira-KAN-3",
           "status": "To Do",
+          "project_id": "KAN",
           "signal_type": "feature_request",
           "source_type": "jira",
           "affected_component": null
         },
-        "version": 3,
+        "version": 1,
         "created_at": "2026-09-08T06:37:24.530000+00:00",
         "updated_at": "2026-09-08T06:37:24.864000+00:00"
       },
       {
-        "artifact_id": "f94011f3-2e42-4d5b-81ad-38eb3e99478c",
-        "artifact_type": "candidate_work_item",
+        "artifact_id": "aa220af2-5478-4579-b301-7062b0efcf7b",
+        "artifact_type": "source_artifact",
         "title": "to fix login page error",
         "content": "the login page gives error even if user entwers correct email ",
         "source": {
-          "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-1"
@@ -78,39 +91,164 @@
         "metadata": {
           "cwi_id": "cwi-jira-KAN-1",
           "status": "To Do",
+          "project_id": "KAN",
           "signal_type": "feature_request",
           "source_type": "jira",
           "affected_component": null
         },
-        "version": 3,
+        "version": 1,
         "created_at": "2026-09-08T06:37:23.538000+00:00",
         "updated_at": "2026-09-08T06:49:20.222000+00:00"
+      },
+      {
+        "artifact_id": "2124cdcc-d449-42d4-a076-dc5bb8e1ddb0",
+        "artifact_type": "source_artifact",
+        "title": "Add CSV export for reports",
+        "content": "As a user, I want to export my monthly report as a CSV file so that I can analyze it in Excel offline. Should include all visible columns and respect any active filters.",
+        "source": {
+          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_type": "jira",
+          "source_name": "Jira project KAN",
+          "source_ref": "KAN-5"
+        },
+        "metadata": {
+          "cwi_id": "cwi-jira-KAN-5",
+          "status": "To Do",
+          "project_id": "KAN",
+          "signal_type": "feature_request",
+          "source_type": "jira",
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-10T03:37:42.672000+00:00",
+        "updated_at": "2026-09-10T03:38:11.209000+00:00"
+      },
+      {
+        "artifact_id": "8c84a6a0-d25d-452e-8538-43d0921cd9f3",
+        "artifact_type": "source_artifact",
+        "title": "Password reset email not arriving",
+        "content": "Multiple users have reported that the password reset email takes over 20 minutes to arrive, sometimes never arrives at all. Checked spam folder, not there either.",
+        "source": {
+          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_type": "jira",
+          "source_name": "Jira project KAN",
+          "source_ref": "KAN-6"
+        },
+        "metadata": {
+          "cwi_id": "cwi-jira-KAN-6",
+          "status": "To Do",
+          "project_id": "KAN",
+          "signal_type": "bug",
+          "source_type": "jira",
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-10T03:38:39.412000+00:00",
+        "updated_at": "2026-09-10T03:40:25.997000+00:00"
+      },
+      {
+        "artifact_id": "ea4d1863-4cba-4521-b329-431bf95784b2",
+        "artifact_type": "source_artifact",
+        "title": "Dashboard fails to load for enterprise accounts",
+        "content": "Users with 10,000+ records report the dashboard hangs on load and eventually times out after 30 seconds. Started happening after the last deploy on Sept 5. Affects Chrome and Firefox both.",
+        "source": {
+          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_type": "jira",
+          "source_name": "Jira project KAN",
+          "source_ref": "KAN-4"
+        },
+        "metadata": {
+          "cwi_id": "cwi-jira-KAN-4",
+          "status": "To Do",
+          "project_id": "KAN",
+          "signal_type": "bug",
+          "source_type": "jira",
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-10T03:35:10.004000+00:00",
+        "updated_at": "2026-09-10T03:40:36.301000+00:00"
+      },
+      {
+        "artifact_id": "8bd0e0bb-6041-4f43-86df-dffb20b1495a",
+        "artifact_type": "source_artifact",
+        "title": "test_requirements.docx",
+        "content": "Password Reset and Account Security Requirements\nBackground: Multiple enterprise customers have reported difficulty recovering access to their accounts when they forget their password. Currently the reset flow takes over 20 minutes to deliver the email, and in some cases the link never arrives, forcing users to contact support directly.\nRequirements: Users should be able to request a password reset from the login page. The system should send a reset link to the registered email within 2 minutes. The reset link should expire after 1 hour for security reasons. If the link expires, the user should be able to request a new one without contacting support.\nAdditional considerations: We should also add rate limiting so a single account cannot request more than 3 reset emails within a 10 minute window, to prevent abuse. The reset confirmation page should clearly state the link has expired if the user tries to use an expired one, rather than showing a generic error.\nSuccess criteria: Reset emails should arrive within 2 minutes for 95 percent of requests. Support tickets related to password reset should decrease by at least 50 percent within one month of this feature shipping.",
+        "source": {
+          "source_id": "ef7a8efb-edf8-4bf1-9f75-8d831ffda196",
+          "source_type": "file_upload",
+          "source_name": "uploads:KAN",
+          "source_ref": "test_requirements.docx"
+        },
+        "metadata": {
+          "cwi_id": "cwi-file-f94a5b3a17c928bc",
+          "status": "uploaded",
+          "project_id": "KAN",
+          "signal_type": "context",
+          "source_type": "file_upload",
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-17T12:01:53.271111+00:00",
+        "updated_at": "2026-09-17T12:01:53.271111+00:00"
       }
     ],
     "provenance": [
       {
-        "artifact_id": "f94011f3-2e42-4d5b-81ad-38eb3e99478c",
-        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "artifact_id": "ea4d1863-4cba-4521-b329-431bf95784b2",
+        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+        "source_ref": "KAN-4",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-09-17T11:58:43.832593+00:00"
+      },
+      {
+        "artifact_id": "8c84a6a0-d25d-452e-8538-43d0921cd9f3",
+        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+        "source_ref": "KAN-6",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-09-17T12:01:02.885491+00:00"
+      },
+      {
+        "artifact_id": "2124cdcc-d449-42d4-a076-dc5bb8e1ddb0",
+        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+        "source_ref": "KAN-5",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-09-17T12:01:03.098182+00:00"
+      },
+      {
+        "artifact_id": "aa220af2-5478-4579-b301-7062b0efcf7b",
+        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
         "source_ref": "KAN-1",
         "extraction_method": "jira_connector",
         "metadata": {},
-        "created_at": "2026-09-09T15:07:30.563652+00:00"
+        "created_at": "2026-09-17T12:01:03.362867+00:00"
       },
       {
-        "artifact_id": "5b82f23c-932f-4527-b962-c930ad5c7674",
-        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "artifact_id": "cb25ea2d-b57e-409c-9a4b-5886678b4417",
+        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
         "source_ref": "KAN-3",
         "extraction_method": "jira_connector",
         "metadata": {},
-        "created_at": "2026-09-09T15:07:30.589306+00:00"
+        "created_at": "2026-09-17T12:01:03.562848+00:00"
       },
       {
-        "artifact_id": "f816f2a7-794b-4880-b902-f5554e1d8d8c",
-        "source_id": "65801857-ff51-4cfc-9fb3-cf74b02ee962",
+        "artifact_id": "8d31733b-f34b-44bc-bfc1-fa06a3203ee3",
+        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
         "source_ref": "KAN-2",
         "extraction_method": "jira_connector",
         "metadata": {},
-        "created_at": "2026-09-09T15:07:30.607802+00:00"
+        "created_at": "2026-09-17T12:01:03.775111+00:00"
+      },
+      {
+        "artifact_id": "8bd0e0bb-6041-4f43-86df-dffb20b1495a",
+        "source_id": "ef7a8efb-edf8-4bf1-9f75-8d831ffda196",
+        "source_ref": "test_requirements.docx",
+        "extraction_method": "file_upload",
+        "metadata": {},
+        "created_at": "2026-09-17T12:01:53.594535+00:00"
       }
     ]
   }
