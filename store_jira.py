@@ -17,6 +17,7 @@ Jira
        -> Artifact Registry
        -> Context Registry
        -> Provenance
+       -> Vector Store (embeddings)
 
 Run: python store_cwis.py
 or:
@@ -53,6 +54,7 @@ from substrate.context_registry import (
     record_provenance,
     record_sync,
 )
+from substrate.vector_store import store_chunks
 
 from substrate.models import initialize_database
 from substrate.db import get_connection
@@ -94,25 +96,11 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # ---------------------------------------------------------
-    # 1. Initialize Common Substrate database
-    # ---------------------------------------------------------
-
     logger.info("Initializing database...")
-
     initialize_database()
-
     logger.info("Database ready.")
 
-    # ---------------------------------------------------------
-    # 2. Build connector
-    # ---------------------------------------------------------
-
     connector = build_connector()
-
-    # ---------------------------------------------------------
-    # 3. Test source connection
-    # ---------------------------------------------------------
 
     if not connector.test_connection():
         logger.error(
@@ -120,9 +108,10 @@ def main() -> None:
         )
         return
 
-    # ---------------------------------------------------------
-    # 4. Register Jira source
-    # ---------------------------------------------------------
+    # project_id uses the Jira project key as the universal identifier —
+    # Confluence and file-upload sources for the same client reuse this
+    # same value, so all three can be queried together by project.
+    project_id = connector.project_key
 
     source_name = f"Jira project {connector.project_key}"
 
@@ -131,6 +120,7 @@ def main() -> None:
         source_name=source_name,
         source_config={
             "project_key": connector.project_key,
+            "project_id": project_id,
         },
     )
 
@@ -140,22 +130,13 @@ def main() -> None:
         source_id,
     )
 
-    # ---------------------------------------------------------
-    # 5. Determine incremental/full sync
-    # ---------------------------------------------------------
-
     sync_key = f"jira:{connector.project_key}"
-
     since = None if args.full else get_last_sync(sync_key)
 
     logger.info(
         "Syncing Jira since: %s",
         since or "(full sync)",
     )
-
-    # ---------------------------------------------------------
-    # 6. Fetch → Map → Store
-    # ---------------------------------------------------------
 
     items_fetched = 0
     items_created = 0
@@ -172,11 +153,8 @@ def main() -> None:
                 issue.get("key"),
             )
 
-            # Raw Jira → common CWI
             cwi = map_issue_to_cwi(issue)
 
-            # Determine whether artifact already exists
-            # based on source + source reference.
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -199,13 +177,14 @@ def main() -> None:
             else:
                 items_created += 1
 
-            # CWI → Artifact Registry
+            # CWI → Artifact Registry (project_id denormalized onto this row)
             artifact_id = upsert_artifact(
                 cwi,
                 source_id,
+                artifact_type="source_artifact",
+                project_id=project_id,
             )
 
-            # Artifact → Provenance
             for source_ref in cwi.get("source_refs", []):
 
                 record_provenance(
@@ -215,9 +194,12 @@ def main() -> None:
                     extraction_method="jira_connector",
                 )
 
-        # -----------------------------------------------------
-        # 7. Record successful sync
-        # -----------------------------------------------------
+            # Artifact → Vector Store (project_id denormalized onto chunks too)
+            store_chunks(
+                artifact_id,
+                cwi.get("raw_summary") or cwi.get("title") or "",
+                project_id=project_id,
+            )
 
         record_sync(
             source_id=source_id,
@@ -229,9 +211,7 @@ def main() -> None:
 
         set_last_sync(sync_key)
 
-        # 8. Build Discovery Agent context package
         package_path = build_discovery_package()
-
         logger.info("Discovery Agent package generated: %s", package_path,)
 
         logger.info("Jira ingestion completed.")
