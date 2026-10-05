@@ -3,12 +3,12 @@
     "package_type": "agent_context",
     "package_version": "1.0",
     "target_agent": "planning.discovery_agent",
-    "generated_at": "2026-09-17T12:03:52.964460+00:00"
+    "generated_at": "2026-10-01T07:53:32.151330+00:00"
   },
   "context": {
     "sources": [
       {
-        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+        "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
         "source_type": "jira",
         "source_name": "Jira project KAN",
         "connection_identifier": null,
@@ -19,7 +19,17 @@
         "status": "active"
       },
       {
-        "source_id": "ef7a8efb-edf8-4bf1-9f75-8d831ffda196",
+        "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+        "source_type": "confluence",
+        "source_name": "Confluence space AD",
+        "connection_identifier": null,
+        "metadata": {
+          "space_key": "AD"
+        },
+        "status": "active"
+      },
+      {
+        "source_id": "46bce28f-8326-4640-9f39-a35c1d5dfbd7",
         "source_type": "file_upload",
         "source_name": "uploads:KAN",
         "connection_identifier": null,
@@ -29,15 +39,15 @@
         "status": "active"
       }
     ],
-    "artifact_count": 7,
+    "artifact_count": 12,
     "artifacts": [
       {
-        "artifact_id": "8d31733b-f34b-44bc-bfc1-fa06a3203ee3",
+        "artifact_id": "1d748de2-be85-463c-9881-6ac865e0441e",
         "artifact_type": "source_artifact",
         "title": "Task 2",
         "content": "Task 2",
         "source": {
-          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-2"
@@ -48,6 +58,7 @@
           "project_id": "KAN",
           "signal_type": "feature_request",
           "source_type": "jira",
+          "needs_review": false,
           "affected_component": null
         },
         "version": 1,
@@ -55,12 +66,12 @@
         "updated_at": "2026-09-08T06:37:24.358000+00:00"
       },
       {
-        "artifact_id": "cb25ea2d-b57e-409c-9a4b-5886678b4417",
+        "artifact_id": "bd9f945a-26a3-42f0-bc6f-734f0547fb3d",
         "artifact_type": "source_artifact",
         "title": "Subtask 2.1",
         "content": "Subtask 2.1",
         "source": {
-          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-3"
@@ -71,6 +82,7 @@
           "project_id": "KAN",
           "signal_type": "feature_request",
           "source_type": "jira",
+          "needs_review": false,
           "affected_component": null
         },
         "version": 1,
@@ -78,35 +90,132 @@
         "updated_at": "2026-09-08T06:37:24.864000+00:00"
       },
       {
-        "artifact_id": "aa220af2-5478-4579-b301-7062b0efcf7b",
+        "artifact_id": "c5f5eb40-13de-4dde-82f8-511e463919b9",
         "artifact_type": "source_artifact",
-        "title": "to fix login page error",
-        "content": "the login page gives error even if user entwers correct email ",
+        "title": "Template - Project plan",
+        "content": "Driver @ mention the driver Approver @ approver Contributors @ contributors Informed @ stakeholders Objective Summarize the objective in 1-2 sentences Due date Type // to add a date Key outcomes List expected outcomes and success metrics Status not started / in progress Yellow / complete Green &nbsp;Problem statement Describe the problem and its impact. Include the hypothesis that's driving your work (&quot;We think X will do Y, and we'll know we've succeeded if Z&quot;). &nbsp;Scope Must have: ",
         "source": {
-          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
-          "source_type": "jira",
-          "source_name": "Jira project KAN",
-          "source_ref": "KAN-1"
+          "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393343"
         },
         "metadata": {
-          "cwi_id": "cwi-jira-KAN-1",
-          "status": "To Do",
-          "project_id": "KAN",
-          "signal_type": "feature_request",
-          "source_type": "jira",
+          "cwi_id": "cwi-confluence-393343",
+          "status": "current",
+          "project_id": null,
+          "signal_type": "context",
+          "source_type": "confluence",
+          "needs_review": true,
           "affected_component": null
         },
         "version": 1,
-        "created_at": "2026-09-08T06:37:23.538000+00:00",
-        "updated_at": "2026-09-08T06:49:20.222000+00:00"
+        "created_at": "2026-09-09T06:48:25.478000+00:00",
+        "updated_at": "2026-09-09T06:48:25.478000+00:00"
       },
       {
-        "artifact_id": "2124cdcc-d449-42d4-a076-dc5bb8e1ddb0",
+        "artifact_id": "355ec183-ac94-4f85-89d7-53089bdfef3a",
+        "artifact_type": "source_artifact",
+        "title": "Template - Decision documentation",
+        "content": "Status Not started / In progress Yellow / Complete Green Impact High Red / Medium Yellow / Low Green Driver @ mention driver Approver @ approver Contributors @ contributors Informed @ stakeholders Due date Type // to add a date Resources Type /link to add links to relevant research, pages, and related decisions &nbsp;Background Provide context on a decision the team needs to make and include information about constraints and challenges. &nbsp;Relevant data Add any data or feedback the team shoul",
+        "source": {
+          "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393356"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-393356",
+          "status": "current",
+          "project_id": null,
+          "signal_type": "context",
+          "source_type": "confluence",
+          "needs_review": true,
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-09T06:48:25.517000+00:00",
+        "updated_at": "2026-09-09T06:48:25.517000+00:00"
+      },
+      {
+        "artifact_id": "2909a255-2942-4a54-9c7b-480d20ae0eb0",
+        "artifact_type": "source_artifact",
+        "title": "Template - Meeting notes",
+        "content": "&nbsp;Date &nbsp;Participants Type @ name to mention a person and add them as a meeting attendee - they will be notified &nbsp;Goals List goals for this meeting (e.g., Set design priorities for FY27) &nbsp;Brainstorm Type /whiteboard to create an interactive canvas for icebreakers, brainstorms, diagramming, retros, and more &nbsp;Discussion topics Time Topic Presenter Notes @ mention teammate Add notes for each discussion topic &nbsp;Action items incomplete &nbsp;Decisions Type /decision to reco",
+        "source": {
+          "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393369"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-393369",
+          "status": "current",
+          "project_id": null,
+          "signal_type": "context",
+          "source_type": "confluence",
+          "needs_review": true,
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-09T06:48:25.572000+00:00",
+        "updated_at": "2026-09-09T06:48:25.572000+00:00"
+      },
+      {
+        "artifact_id": "a9d62e07-6684-40e9-9377-aabd198d3719",
+        "artifact_type": "source_artifact",
+        "title": "ADLC DOCS",
+        "content": "Description #F4F5F7 In a sentence or two, describe the purpose of this space. Project Tracker com.atlassian.confluence.project-linker project-linker default 3781a39a-e79f-41c1-a914-38846c22a77c Recently updated content This list below will automatically update each time somebody in your space creates or updates content. page,whiteboard,database,blog 10 concise true Contributors This list below will automatically update each time somebody in your space creates or updates content. descendants 10",
+        "source": {
+          "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "393329"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-393329",
+          "status": "current",
+          "project_id": null,
+          "signal_type": "context",
+          "source_type": "confluence",
+          "needs_review": true,
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-09T06:48:25.616000+00:00",
+        "updated_at": "2026-09-09T06:48:25.616000+00:00"
+      },
+      {
+        "artifact_id": "aaeb6705-30ff-44b0-8573-d2d6a26fc88c",
+        "artifact_type": "source_artifact",
+        "title": "ADLC OVERVIEW",
+        "content": "TO AUTOMATE SDLC BY LEVERAGING AI",
+        "source": {
+          "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+          "source_type": "confluence",
+          "source_name": "Confluence space AD",
+          "source_ref": "327682"
+        },
+        "metadata": {
+          "cwi_id": "cwi-confluence-327682",
+          "status": "current",
+          "project_id": null,
+          "signal_type": "context",
+          "source_type": "confluence",
+          "needs_review": true,
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-09T06:50:41.984000+00:00",
+        "updated_at": "2026-09-09T06:50:41.984000+00:00"
+      },
+      {
+        "artifact_id": "18ec8ba6-4092-465a-adbf-43ff1a2042cc",
         "artifact_type": "source_artifact",
         "title": "Add CSV export for reports",
         "content": "As a user, I want to export my monthly report as a CSV file so that I can analyze it in Excel offline. Should include all visible columns and respect any active filters.",
         "source": {
-          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-5"
@@ -117,6 +226,7 @@
           "project_id": "KAN",
           "signal_type": "feature_request",
           "source_type": "jira",
+          "needs_review": false,
           "affected_component": null
         },
         "version": 1,
@@ -124,12 +234,12 @@
         "updated_at": "2026-09-10T03:38:11.209000+00:00"
       },
       {
-        "artifact_id": "8c84a6a0-d25d-452e-8538-43d0921cd9f3",
+        "artifact_id": "dc5c611b-8fb6-4db2-b9bb-a32840a94791",
         "artifact_type": "source_artifact",
         "title": "Password reset email not arriving",
         "content": "Multiple users have reported that the password reset email takes over 20 minutes to arrive, sometimes never arrives at all. Checked spam folder, not there either.",
         "source": {
-          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-6"
@@ -140,6 +250,7 @@
           "project_id": "KAN",
           "signal_type": "bug",
           "source_type": "jira",
+          "needs_review": false,
           "affected_component": null
         },
         "version": 1,
@@ -147,12 +258,12 @@
         "updated_at": "2026-09-10T03:40:25.997000+00:00"
       },
       {
-        "artifact_id": "ea4d1863-4cba-4521-b329-431bf95784b2",
+        "artifact_id": "8cd40164-4ab2-4c32-9a4a-6b1510c5ebc9",
         "artifact_type": "source_artifact",
         "title": "Dashboard fails to load for enterprise accounts",
         "content": "Users with 10,000+ records report the dashboard hangs on load and eventually times out after 30 seconds. Started happening after the last deploy on Sept 5. Affects Chrome and Firefox both.",
         "source": {
-          "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+          "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
           "source_type": "jira",
           "source_name": "Jira project KAN",
           "source_ref": "KAN-4"
@@ -163,6 +274,7 @@
           "project_id": "KAN",
           "signal_type": "bug",
           "source_type": "jira",
+          "needs_review": false,
           "affected_component": null
         },
         "version": 1,
@@ -170,12 +282,36 @@
         "updated_at": "2026-09-10T03:40:36.301000+00:00"
       },
       {
-        "artifact_id": "8bd0e0bb-6041-4f43-86df-dffb20b1495a",
+        "artifact_id": "400d93e3-feb2-4092-b894-a7ee9097dfde",
+        "artifact_type": "source_artifact",
+        "title": "to fix login page error.",
+        "content": "the login page gives error even if user entwers correct email ",
+        "source": {
+          "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
+          "source_type": "jira",
+          "source_name": "Jira project KAN",
+          "source_ref": "KAN-1"
+        },
+        "metadata": {
+          "cwi_id": "cwi-jira-KAN-1",
+          "status": "To Do",
+          "project_id": "KAN",
+          "signal_type": "feature_request",
+          "source_type": "jira",
+          "needs_review": false,
+          "affected_component": null
+        },
+        "version": 1,
+        "created_at": "2026-09-08T06:37:23.538000+00:00",
+        "updated_at": "2026-10-01T06:59:26.435000+00:00"
+      },
+      {
+        "artifact_id": "d809fc92-542e-4173-8f79-84fbc9c62109",
         "artifact_type": "source_artifact",
         "title": "test_requirements.docx",
         "content": "Password Reset and Account Security Requirements\nBackground: Multiple enterprise customers have reported difficulty recovering access to their accounts when they forget their password. Currently the reset flow takes over 20 minutes to deliver the email, and in some cases the link never arrives, forcing users to contact support directly.\nRequirements: Users should be able to request a password reset from the login page. The system should send a reset link to the registered email within 2 minutes. The reset link should expire after 1 hour for security reasons. If the link expires, the user should be able to request a new one without contacting support.\nAdditional considerations: We should also add rate limiting so a single account cannot request more than 3 reset emails within a 10 minute window, to prevent abuse. The reset confirmation page should clearly state the link has expired if the user tries to use an expired one, rather than showing a generic error.\nSuccess criteria: Reset emails should arrive within 2 minutes for 95 percent of requests. Support tickets related to password reset should decrease by at least 50 percent within one month of this feature shipping.",
         "source": {
-          "source_id": "ef7a8efb-edf8-4bf1-9f75-8d831ffda196",
+          "source_id": "46bce28f-8326-4640-9f39-a35c1d5dfbd7",
           "source_type": "file_upload",
           "source_name": "uploads:KAN",
           "source_ref": "test_requirements.docx"
@@ -186,69 +322,110 @@
           "project_id": "KAN",
           "signal_type": "context",
           "source_type": "file_upload",
+          "needs_review": true,
           "affected_component": null
         },
         "version": 1,
-        "created_at": "2026-09-17T12:01:53.271111+00:00",
-        "updated_at": "2026-09-17T12:01:53.271111+00:00"
+        "created_at": "2026-10-01T07:52:49.878468+00:00",
+        "updated_at": "2026-10-01T07:52:49.878468+00:00"
       }
     ],
     "provenance": [
       {
-        "artifact_id": "ea4d1863-4cba-4521-b329-431bf95784b2",
-        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
-        "source_ref": "KAN-4",
-        "extraction_method": "jira_connector",
-        "metadata": {},
-        "created_at": "2026-09-17T11:58:43.832593+00:00"
-      },
-      {
-        "artifact_id": "8c84a6a0-d25d-452e-8538-43d0921cd9f3",
-        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
-        "source_ref": "KAN-6",
-        "extraction_method": "jira_connector",
-        "metadata": {},
-        "created_at": "2026-09-17T12:01:02.885491+00:00"
-      },
-      {
-        "artifact_id": "2124cdcc-d449-42d4-a076-dc5bb8e1ddb0",
-        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
-        "source_ref": "KAN-5",
-        "extraction_method": "jira_connector",
-        "metadata": {},
-        "created_at": "2026-09-17T12:01:03.098182+00:00"
-      },
-      {
-        "artifact_id": "aa220af2-5478-4579-b301-7062b0efcf7b",
-        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+        "artifact_id": "400d93e3-feb2-4092-b894-a7ee9097dfde",
+        "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
         "source_ref": "KAN-1",
         "extraction_method": "jira_connector",
         "metadata": {},
-        "created_at": "2026-09-17T12:01:03.362867+00:00"
+        "created_at": "2026-10-01T07:52:06.984087+00:00"
       },
       {
-        "artifact_id": "cb25ea2d-b57e-409c-9a4b-5886678b4417",
-        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+        "artifact_id": "8cd40164-4ab2-4c32-9a4a-6b1510c5ebc9",
+        "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
+        "source_ref": "KAN-4",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:46.185131+00:00"
+      },
+      {
+        "artifact_id": "dc5c611b-8fb6-4db2-b9bb-a32840a94791",
+        "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
+        "source_ref": "KAN-6",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:46.352522+00:00"
+      },
+      {
+        "artifact_id": "18ec8ba6-4092-465a-adbf-43ff1a2042cc",
+        "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
+        "source_ref": "KAN-5",
+        "extraction_method": "jira_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:46.510974+00:00"
+      },
+      {
+        "artifact_id": "bd9f945a-26a3-42f0-bc6f-734f0547fb3d",
+        "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
         "source_ref": "KAN-3",
         "extraction_method": "jira_connector",
         "metadata": {},
-        "created_at": "2026-09-17T12:01:03.562848+00:00"
+        "created_at": "2026-10-01T07:52:46.676609+00:00"
       },
       {
-        "artifact_id": "8d31733b-f34b-44bc-bfc1-fa06a3203ee3",
-        "source_id": "82e39dbd-dfca-4ddf-8b61-3caae9e9e357",
+        "artifact_id": "1d748de2-be85-463c-9881-6ac865e0441e",
+        "source_id": "4405b457-47c7-41a3-9943-ff0c7e935519",
         "source_ref": "KAN-2",
         "extraction_method": "jira_connector",
         "metadata": {},
-        "created_at": "2026-09-17T12:01:03.775111+00:00"
+        "created_at": "2026-10-01T07:52:46.838972+00:00"
       },
       {
-        "artifact_id": "8bd0e0bb-6041-4f43-86df-dffb20b1495a",
-        "source_id": "ef7a8efb-edf8-4bf1-9f75-8d831ffda196",
+        "artifact_id": "aaeb6705-30ff-44b0-8573-d2d6a26fc88c",
+        "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+        "source_ref": "327682",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:52.919386+00:00"
+      },
+      {
+        "artifact_id": "a9d62e07-6684-40e9-9377-aabd198d3719",
+        "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+        "source_ref": "393329",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:53.038630+00:00"
+      },
+      {
+        "artifact_id": "c5f5eb40-13de-4dde-82f8-511e463919b9",
+        "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+        "source_ref": "393343",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:53.157065+00:00"
+      },
+      {
+        "artifact_id": "355ec183-ac94-4f85-89d7-53089bdfef3a",
+        "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+        "source_ref": "393356",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:53.291146+00:00"
+      },
+      {
+        "artifact_id": "2909a255-2942-4a54-9c7b-480d20ae0eb0",
+        "source_id": "fa75c539-a8ea-47be-8525-343aeacb6641",
+        "source_ref": "393369",
+        "extraction_method": "confluence_connector",
+        "metadata": {},
+        "created_at": "2026-10-01T07:52:53.398969+00:00"
+      },
+      {
+        "artifact_id": "d809fc92-542e-4173-8f79-84fbc9c62109",
+        "source_id": "46bce28f-8326-4640-9f39-a35c1d5dfbd7",
         "source_ref": "test_requirements.docx",
         "extraction_method": "file_upload",
         "metadata": {},
-        "created_at": "2026-09-17T12:01:53.594535+00:00"
+        "created_at": "2026-10-01T07:52:56.785456+00:00"
       }
     ]
   }

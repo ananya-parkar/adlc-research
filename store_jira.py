@@ -1,4 +1,4 @@
-# store_cwis.py
+# store_jira.py
 """
 Run this to sync issues from Jira into local CWI storage.
 

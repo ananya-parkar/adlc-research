@@ -41,12 +41,10 @@ def upsert_artifact(
         "signal_type": cwi.get("signal_type"),
         "affected_component": cwi.get("affected_component"),
         "status": cwi.get("status"),
-        # project_id lives here (denormalized) so any query filtering by
-        # project can read it straight off this row — no JOIN through
-        # context_sources needed. Falls back to cwi["project_id"] if the
-        # caller didn't pass it explicitly (file_mapper already sets it there).
+        "needs_review": cwi.get("needs_review", False),
         "project_id": project_id or cwi.get("project_id"),
     }
+    
     if extra_metadata:
         base_metadata.update(extra_metadata)
 
