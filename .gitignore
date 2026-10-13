@@ -2,3 +2,5 @@
 cwis.json
 sync_state.json
 __pycache__/
+storage/discovery_results/
+storage/packages/

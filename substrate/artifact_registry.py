@@ -29,6 +29,9 @@ def upsert_artifact(
     extra_metadata is merged into the base metadata dict — use it
     for fields specific to the artifact_type (e.g. confidence,
     is_actionable, reasoning for refined artifacts).
+
+    On update, metadata is MERGED (existing || new), so keys written by
+    someone else — e.g. a human's review_status — survive re-runs.
     """
     source_refs = cwi.get("source_refs", [])
     if not source_refs:
@@ -44,7 +47,11 @@ def upsert_artifact(
         "needs_review": cwi.get("needs_review", False),
         "project_id": project_id or cwi.get("project_id"),
     }
-    
+
+    # Merge the rich fields from the mapper (priority, links, parent,
+    # comments, quality_flags, ...). Without this they are dropped.
+    base_metadata.update(cwi.get("metadata") or {})
+
     if extra_metadata:
         base_metadata.update(extra_metadata)
 
@@ -80,7 +87,7 @@ def upsert_artifact(
                 DO UPDATE SET
                     title = EXCLUDED.title,
                     content = EXCLUDED.content,
-                    metadata = EXCLUDED.metadata,
+                    metadata = artifacts.metadata || EXCLUDED.metadata,
                     updated_at = EXCLUDED.updated_at,
                     version = artifacts.version + 1
                 RETURNING artifact_id
@@ -100,6 +107,36 @@ def upsert_artifact(
         conn.commit()
 
     return str(artifact_id)
+
+
+def supersede_artifacts(artifact_type: str, project_id: str, keep_artifact_ids: List[str]) -> int:
+    """
+    Mark artifacts of this type/project from earlier runs that were NOT
+    re-produced this run as lifecycle="superseded".
+
+    Rows a human has already reviewed (metadata.review_status set to
+    anything other than 'proposed') are never touched.
+
+    Returns the number of rows marked.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE artifacts
+                   SET metadata = metadata || '{"lifecycle": "superseded"}'::jsonb,
+                       updated_at = NOW()
+                 WHERE artifact_type = %s
+                   AND metadata->>'project_id' = %s
+                   AND NOT (artifact_id::text = ANY(%s))
+                   AND COALESCE(metadata->>'review_status', 'proposed') = 'proposed'
+                   AND COALESCE(metadata->>'lifecycle', 'active') <> 'superseded'
+                """,
+                (artifact_type, project_id, [str(i) for i in keep_artifact_ids]),
+            )
+            count = cur.rowcount
+        conn.commit()
+    return count
 
 
 def get_artifacts_by_type(artifact_type: str) -> List[Dict[str, Any]]:

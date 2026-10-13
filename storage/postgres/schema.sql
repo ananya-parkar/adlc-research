@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
     version INTEGER DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(source_id, source_ref)
+    UNIQUE(source_id, source_ref, artifact_type)
 );
 
 -- Provenance
