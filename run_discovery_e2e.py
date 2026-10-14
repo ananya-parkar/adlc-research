@@ -1,3 +1,6 @@
+
+"""Run the complete ADLC multi-source Discovery + Architecture E2E pipeline."""
+
 import argparse
 import os
 import re
@@ -5,11 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent
 DEFAULT_PACKAGE = ROOT / "storage" / "packages" / "discovery_agent_package.json"
 
-# Common sync-state files used by the current connector implementation.
 SYNC_STATE_FILES = [
     ROOT / "sync_state.json",
     ROOT / "storage" / "sync_state.json",
@@ -31,9 +32,11 @@ def stage(number: int, title: str) -> None:
 
 
 def run_command(command: list[str], patterns: list[str]) -> tuple[int, str]:
-    """Run command and print only useful lines."""
+    """Run a subprocess, print useful matching lines, and return all output."""
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+
+    print(f"  • Running: {' '.join(command)}")
 
     process = subprocess.Popen(
         command,
@@ -61,6 +64,7 @@ def run_command(command: list[str], patterns: list[str]) -> tuple[int, str]:
     if return_code != 0:
         print("\n  ✗ Command failed.")
         print("  Last output:")
+
         for line in output[-25:]:
             print(f"    {line}")
 
@@ -73,7 +77,7 @@ def extract(pattern: str, text: str, default: str = "—") -> str:
 
 
 def clear_database() -> bool:
-    """Clear application data while preserving the database schema."""
+    """Clear application data while preserving the PostgreSQL schema."""
     print("  • Clearing application data from PostgreSQL...")
 
     command = [
@@ -108,7 +112,7 @@ def clear_database() -> bool:
 
 
 def clear_local_state() -> None:
-    """Remove local connector sync state and generated Discovery package."""
+    """Remove connector sync state and the generated Discovery package."""
     found_state = False
 
     for state_file in SYNC_STATE_FILES:
@@ -129,49 +133,54 @@ def clear_local_state() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run Jira + Confluence + DOCX -> Discovery Agent E2E flow."
+        description=(
+            "Run Jira + Confluence + DOCX ingestion, Discovery Agent, "
+            "and Architecture Discovery Agent end to end."
+        )
     )
+
     parser.add_argument(
         "--project-id",
         default="KAN",
         help="Project ID used for Jira and DOCX ingestion. Default: KAN",
     )
+
     parser.add_argument(
         "--file",
         default="test_requirements.docx",
         help="DOCX file to ingest. Default: test_requirements.docx",
     )
-    args = parser.parse_args()
 
+    args = parser.parse_args()
     file_path = ROOT / args.file
 
-    header("ADLC RESEARCH — FULL MULTI-SOURCE DISCOVERY E2E")
+    header("ADLC RESEARCH — FULL MULTI-SOURCE E2E")
 
     print(
         """
   Fresh run:
 
   Clear DB + Sync State
-          ↓
+           ↓
        Jira FULL
-          ↓
+           ↓
     Confluence FULL
-          ↓
+           ↓
       DOCX / File
-          ↓
+           ↓
     Common Substrate
-          ↓
-  Discovery Context Package
-          ↓
-    Discovery Agent
-          ↓
+           ↓
+   Discovery Agent
+           ↓
  Candidate Work Items + Patterns
+           ↓
+ Architecture Discovery Agent
+           ↓
+ Architecture Blueprints
 """
     )
 
-    # ------------------------------------------------------------------
-    # STEP 1 — Fresh state
-    # ------------------------------------------------------------------
+    # STEP 1 — Reset
     stage(1, "RESET TO A FRESH STATE")
 
     if not clear_database():
@@ -180,9 +189,7 @@ def main() -> int:
 
     clear_local_state()
 
-    # ------------------------------------------------------------------
     # STEP 2 — Jira
-    # ------------------------------------------------------------------
     stage(2, "JIRA FULL INGESTION")
 
     jira_code, jira_output = run_command(
@@ -216,9 +223,7 @@ def main() -> int:
     print(f"    Created:        {jira_created}")
     print(f"    Updated:        {jira_updated}")
 
-    # ------------------------------------------------------------------
     # STEP 3 — Confluence
-    # ------------------------------------------------------------------
     stage(3, "CONFLUENCE FULL INGESTION")
 
     confluence_code, confluence_output = run_command(
@@ -248,12 +253,11 @@ def main() -> int:
     )
 
     print("\n  ✓ Confluence ingestion completed")
+
     if confluence_fetched != "—":
         print(f"    Items fetched: {confluence_fetched}")
 
-    # ------------------------------------------------------------------
-    # STEP 4 — DOCX
-    # ------------------------------------------------------------------
+    # STEP 4 — DOCX / file
     stage(4, "DOCX / FILE INGESTION")
 
     if not file_path.exists():
@@ -289,9 +293,7 @@ def main() -> int:
 
     print("\n  ✓ DOCX ingestion completed")
 
-    # ------------------------------------------------------------------
     # STEP 5 — Discovery Agent
-    # ------------------------------------------------------------------
     stage(5, "DISCOVERY AGENT")
 
     discovery_code, discovery_output = run_command(
@@ -318,14 +320,17 @@ def main() -> int:
         r"Package contains\s+(\d+)\s+total artifacts",
         discovery_output,
     )
+
     source_count = extract(
         r"Package contains\s+\d+\s+total artifacts;\s+(\d+)\s+source artifacts",
         discovery_output,
     )
+
     cwi_count = extract(
         r"Discovery Agent produced\s+(\d+)\s+candidate work items",
         discovery_output,
     )
+
     pattern_count = extract(
         r"Discovery Agent produced\s+\d+\s+candidate work items and\s+(\d+)\s+patterns",
         discovery_output,
@@ -344,61 +349,162 @@ def main() -> int:
     ]
 
     print("\n  ✓ Discovery Agent completed")
-
     print("\n  Discovery Summary")
     print("  " + "─" * 72)
     print(f"  • Total package artifacts : {package_count}")
     print(f"  • Source artifacts        : {source_count}")
     print(f"  • Candidate Work Items    : {cwi_count}")
-    print(f"  • Patterns detected      : {pattern_count}")
+    print(f"  • Patterns detected       : {pattern_count}")
 
     if cwi_lines:
         print("\n  Candidate Work Items")
         print("  " + "─" * 72)
+
         for line in cwi_lines:
-            message = line.split("INFO ", 1)[-1]
-            print(f"  • {message}")
+            print(f"  • {line.split('INFO ', 1)[-1]}")
 
     if pattern_lines:
         print("\n  Discovery Patterns")
         print("  " + "─" * 72)
+
         for line in pattern_lines:
             message = line.split("DISCOVERY PATTERN:", 1)[-1].strip()
             print(f"  • {message}")
 
-    # ------------------------------------------------------------------
+    # STEP 6 — Architecture Discovery Agent
+    stage(6, "ARCHITECTURE DISCOVERY AGENT")
+
+    architecture_code, architecture_output = run_command(
+        [
+            sys.executable,
+            "-m",
+            "agents.architecture.architecture_discovery_agent",
+        ],
+        [
+            r"Architecture context package built",
+            r"Package contains\s+\d+\s+CWIs",
+            r"Processing architecture CWI",
+            r"Architecture generation failed for CWI",
+            r"Architecture reasoning produced",
+            r"Created/updated blueprint",
+            r"Architecture Discovery complete",
+        ],
+    )
+
+    if architecture_code != 0:
+        print("\n✗ E2E flow stopped at Architecture Discovery Agent.")
+        return architecture_code
+
+    architecture_cwi_count = extract(
+        r"Package contains\s+(\d+)\s+CWIs",
+        architecture_output,
+    )
+
+    blueprints_generated = extract(
+        r"Architecture reasoning produced\s+(\d+)\s+blueprint",
+        architecture_output,
+        "0",
+    )
+
+    blueprint_match = re.search(
+        r"Architecture Discovery complete:\s*(\d+)\s*/\s*(\d+)\s+blueprints stored",
+        architecture_output,
+        re.IGNORECASE,
+    )
+
+    if blueprint_match:
+        blueprints_stored = blueprint_match.group(1)
+        blueprints_expected = blueprint_match.group(2)
+    else:
+        blueprints_stored = str(
+            sum(
+                1
+                for line in architecture_output.splitlines()
+                if "Created/updated blueprint" in line
+            )
+        )
+        blueprints_expected = architecture_cwi_count
+
+    failed_cwi_lines = [
+        line
+        for line in architecture_output.splitlines()
+        if "Architecture generation failed for CWI" in line
+    ]
+
+    review_required_count = sum(
+        1
+        for line in architecture_output.splitlines()
+        if "Created/updated blueprint" in line
+        and re.search(r"needs_review=True", line, re.IGNORECASE)
+    )
+
+    print("\n  Architecture Summary")
+    print("  " + "─" * 72)
+    print(f"  • CWIs in architecture package : {architecture_cwi_count}")
+    print(f"  • Blueprints generated         : {blueprints_generated}")
+    print(f"  • Blueprints stored            : {blueprints_stored}")
+    print(f"  • Blueprints needing review    : {review_required_count}")
+    print(f"  • CWI generation failures      : {len(failed_cwi_lines)}")
+
+    if failed_cwi_lines:
+        print("\n  ⚠ CWIs skipped after generation errors")
+        print("  " + "─" * 72)
+
+        for line in failed_cwi_lines:
+            print(f"  • {line.split('ERROR ', 1)[-1]}")
+
+    partial_architecture = (
+        architecture_cwi_count != "—"
+        and blueprints_stored != architecture_cwi_count
+    )
+
+    if partial_architecture:
+        print(
+            "\n⚠ Architecture stage finished with partial results. "
+            "Successful blueprints are stored; failed CWIs need a retry."
+        )
+    else:
+        print("\n  ✓ Architecture Discovery Agent completed")
+
     # FINAL SUMMARY
-    # ------------------------------------------------------------------
     header("FULL MULTI-SOURCE E2E FLOW COMPLETED", "─")
 
     print(
         f"""
   ✓ Fresh PostgreSQL state
-  ✓ Jira FULL ingestion
+  ✓ Jira FULL ingestion ({jira_fetched} issues fetched)
   ✓ Confluence FULL ingestion
-  ✓ DOCX ingestion
+  ✓ DOCX ingestion ({file_path.name})
   ✓ Common Substrate populated
-  ✓ Discovery package built   ({source_count} source artifacts)
+  ✓ Discovery package built ({source_count} source artifacts)
   ✓ Discovery Agent executed
-  ✓ Candidate Work Items      ({cwi_count})
-  ✓ Discovery patterns        ({pattern_count})
+  ✓ Candidate Work Items ({cwi_count})
+  ✓ Discovery patterns ({pattern_count})
+  {'⚠' if partial_architecture else '✓'} Architecture blueprints stored ({blueprints_stored})
+  • Architecture CWI failures: {len(failed_cwi_lines)}
+  • Blueprints needing review: {review_required_count}
 
   End-to-end:
 
   Jira ──────────────┐
                      │
   Confluence ────────┼──→ Common Substrate
-                     │          ↓
-  DOCX / File ───────┘   Discovery Context
-                              ↓
-                       Discovery Agent
-                              ↓
-                   Candidate Work Items
-                         + Patterns
+                     │             ↓
+  DOCX / File ───────┘      Discovery Context
+                                   ↓
+                            Discovery Agent
+                                   ↓
+                         Candidate Work Items
+                              + Patterns
+                                   ↓
+                      Architecture Discovery Agent
+                                   ↓
+                        Architecture Blueprints
 """
     )
 
-    return 0
+    # Return non-zero if architecture outputs are incomplete.
+    return 2 if partial_architecture else 0
 
 
 if __name__ == "__main__":

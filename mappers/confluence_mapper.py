@@ -1,3 +1,4 @@
+# mappers/confluence_mapper.py
 """
 Maps a raw Confluence page into the CWI schema.
 

@@ -1,3 +1,4 @@
+# connectors/confluence_connector.py
 """
 Confluence Cloud connector implementing the standard SourceConnector
 interface (same shape as JiraConnector / AdoConnector).

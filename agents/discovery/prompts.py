@@ -1,3 +1,4 @@
+# agents/discovery/prompts.py
 """
 Prompt templates for the Discovery Agent's synthesis step.
 
