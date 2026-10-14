@@ -1,3 +1,4 @@
+# substrate/vector_store.py
 """
 Vector Store — embeds artifact text into knowledge_chunks for
 semantic search, similarity-based dedup, and future RAG retrieval

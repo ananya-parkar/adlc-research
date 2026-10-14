@@ -1,7 +1,6 @@
+# llm_client.py
 """
-Provider-agnostic LLM client. Every agent calls call_llm_json() —
-which provider actually runs underneath is controlled entirely by
-.env, no code changes needed to swap providers later.
+Provider-agnostic LLM client.
 
 .env controls:
     LLM_PROVIDER=groq          # "groq" | "anthropic" | "openai"
@@ -83,6 +82,7 @@ def _chat_kwargs(system_prompt, user_prompt, model, max_tokens, temperature, jso
 def _call_groq(system_prompt, user_prompt, model, max_tokens, temperature, json_mode) -> Tuple[str, bool]:
     if "groq" not in _clients:
         from groq import Groq
+
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError("GROQ_API_KEY not set in environment")
@@ -98,6 +98,7 @@ def _call_groq(system_prompt, user_prompt, model, max_tokens, temperature, json_
 def _call_openai(system_prompt, user_prompt, model, max_tokens, temperature, json_mode) -> Tuple[str, bool]:
     if "openai" not in _clients:
         from openai import OpenAI
+
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set in environment")
@@ -163,33 +164,69 @@ def _complete(system_prompt, user_prompt, model, max_tokens, temperature, json_m
 # ----------------------------------------------------------------------
 # public API
 # ----------------------------------------------------------------------
+
 def call_llm(
     system_prompt: str,
     user_prompt: str,
     model: Optional[str] = None,
     max_tokens: int = 1024,
     temperature: Optional[float] = None,
+    json_mode: bool = False,
 ) -> str:
     """Raw text response from whichever provider is configured in .env."""
-    text, truncated = _complete(system_prompt, user_prompt, model, max_tokens, temperature, json_mode=False)
+    text, truncated = _complete(
+        system_prompt,
+        user_prompt,
+        model,
+        max_tokens,
+        temperature,
+        json_mode,
+    )
     if truncated:
-        logger.warning("LLM response was truncated at max_tokens=%d", max_tokens)
+        logger.warning(
+            "LLM response was truncated at max_tokens=%d",
+            max_tokens,
+        )
     return text
 
 
+
+
 def _parse_json(raw: str) -> Dict[str, Any]:
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", (raw or "").strip())
+    """Parse a JSON object, allowing fences or surrounding prose."""
+    cleaned = re.sub(
+        r"^```(?:json)?\s*|\s*```$",
+        "",
+        (raw or "").strip(),
+        flags=re.IGNORECASE,
+    )
+
     try:
-        return json.loads(cleaned)
+        result = json.loads(cleaned)
     except json.JSONDecodeError:
-        pass
-    start, end = cleaned.find("{"), cleaned.rfind("}")
-    if start != -1 and end > start:
+        result = None
+
+    if result is None:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+
+        if start == -1 or end <= start:
+            raise LLMResponseError("LLM did not return valid JSON")
+
         try:
-            return json.loads(cleaned[start:end + 1])
-        except json.JSONDecodeError:
-            pass
-    raise LLMResponseError("LLM did not return valid JSON")
+            result = json.loads(cleaned[start:end + 1])
+        except json.JSONDecodeError as exc:
+            raise LLMResponseError(
+                "LLM did not return valid JSON"
+            ) from exc
+
+    if not isinstance(result, dict):
+        raise LLMResponseError(
+            f"Expected a JSON object, got {type(result).__name__}"
+        )
+
+    return result
+
 
 
 def call_llm_json(
@@ -200,21 +237,61 @@ def call_llm_json(
     temperature: Optional[float] = 0.1,
 ) -> Dict[str, Any]:
     """
-    Calls the LLM and parses the answer as a JSON object.
-
-    Raises:
-        LLMTruncatedError — answer hit max_tokens (caller should shrink input or raise the limit)
-        LLMResponseError  — answer was not valid JSON
+    Generate a JSON object.
+    Retry once for invalid JSON, but do not retry truncation
+    or provider/API failures as if they were parsing errors.
     """
-    json_mode = _json_mode_enabled() and _get_provider() in ("groq", "openai")
-    raw, truncated = _complete(system_prompt, user_prompt, model, max_tokens, temperature, json_mode)
+    provider = _get_provider()
+    json_mode = _json_mode_enabled() and provider in ("groq", "openai")
+    last_error = None
 
-    if truncated:
-        logger.error("LLM response truncated at max_tokens=%d (%d chars received)", max_tokens, len(raw))
-        raise LLMTruncatedError(f"LLM response truncated at max_tokens={max_tokens}")
+    for attempt in range(2):
+        retry_prompt = user_prompt
 
-    try:
-        return _parse_json(raw)
-    except LLMResponseError:
-        logger.error("Failed to parse LLM response as JSON. Raw response (first 2000 chars):\n%s", raw[:2000])
-        raise
+        if attempt == 1:
+            retry_prompt += (
+                "\n\nIMPORTANT: Your previous response was not valid JSON. "
+                "Regenerate the complete response from scratch. "
+                "Return exactly one valid JSON object. "
+                "Use double quotes for all JSON keys and string values. "
+                "Use valid JSON numbers. "
+                "Do not include Markdown fences, comments, or "
+                "explanatory text. Do not omit required fields."
+            )
+            logger.warning(
+                "Retrying LLM JSON generation after invalid response"
+            )
+
+        raw, truncated = _complete(
+            system_prompt,
+            retry_prompt,
+            model,
+            max_tokens,
+            temperature,
+            json_mode,
+        )
+
+        if truncated:
+            raise LLMTruncatedError(
+                f"LLM response truncated at max_tokens={max_tokens}"
+            )
+
+        try:
+            return _parse_json(raw)
+        except LLMResponseError as exc:
+            last_error = exc
+            logger.warning(
+                "LLM JSON parse failed on attempt %s/2: %s",
+                attempt + 1,
+                exc,
+            )
+
+            if attempt == 1:
+                logger.error(
+                    "Invalid JSON after retry. Response excerpt: %s",
+                    raw[:2000],
+                )
+
+    raise LLMResponseError(
+        f"LLM did not return valid JSON after 2 attempts: {last_error}"
+    ) from last_error

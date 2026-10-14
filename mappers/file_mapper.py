@@ -1,3 +1,4 @@
+# mappers/file_mapper.py
 """
 Maps extracted document text into the source_artifact schema.
 Same shape as jira_mapper/confluence_mapper output, but for

@@ -1,3 +1,4 @@
+# connectors/file_connector.py
 """
 File connector — handles user-uploaded PDF/DOCX documents (requirement
 docs, specs, anything not already in Jira/Confluence).
