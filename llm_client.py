@@ -2,21 +2,30 @@
 """
 Provider-agnostic LLM client.
 
-Every agent calls call_llm_json(). The provider is configured through .env.
-
-.env:
-    LLM_PROVIDER=groq
-    LLM_MODEL=llama-3.3-70b-versatile
-    GROQ_API_KEY=...
+.env controls:
+    LLM_PROVIDER=groq          # "groq" | "anthropic" | "openai"
+    LLM_MODEL=llama-3.3-70b-versatile   # optional — sensible default used if unset
+    LLM_JSON_MODE=true         # optional — native JSON mode on groq/openai (default true)
+    GROQ_API_KEY=...           # whichever provider you're using
     ANTHROPIC_API_KEY=...
     OPENAI_API_KEY=...
+
+What changed vs v1:
+  * Detects truncated responses (hit max_tokens) and raises
+    LLMTruncatedError instead of a confusing JSONDecodeError, so callers
+    can split their input and retry.
+  * Native JSON mode on Groq/OpenAI (response_format=json_object), with
+    automatic fallback if the model doesn't support it.
+  * More forgiving JSON extraction (code fences, leading/trailing prose).
+  * Low default temperature for JSON calls (more stable output).
+  * More SDK retries, so rate limits (429) back off instead of failing.
 """
 
 import json
 import logging
 import os
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +35,17 @@ DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
 }
 
-_clients: Dict[str, Any] = {}
+SDK_MAX_RETRIES = 5
+
+_clients: Dict[str, Any] = {}  # cached per-provider client instances
+
+
+class LLMResponseError(ValueError):
+    """The LLM answered, but the answer is unusable (invalid JSON, truncated, ...)."""
+
+
+class LLMTruncatedError(LLMResponseError):
+    """The answer stopped because it hit max_tokens."""
 
 
 def _get_provider() -> str:
@@ -37,113 +56,80 @@ def _get_model(provider: str) -> str:
     return os.environ.get("LLM_MODEL") or DEFAULT_MODELS[provider]
 
 
-def _call_groq(
-    system_prompt: str,
-    user_prompt: str,
-    model: str,
-    max_tokens: int,
-    json_mode: bool = False,
-) -> str:
+def _json_mode_enabled() -> bool:
+    return os.environ.get("LLM_JSON_MODE", "true").lower() in ("1", "true", "yes")
+
+
+# ----------------------------------------------------------------------
+# providers — each returns (text, truncated)
+# ----------------------------------------------------------------------
+def _chat_kwargs(system_prompt, user_prompt, model, max_tokens, temperature, json_mode):
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    return kwargs
+
+
+def _call_groq(system_prompt, user_prompt, model, max_tokens, temperature, json_mode) -> Tuple[str, bool]:
     if "groq" not in _clients:
         from groq import Groq
 
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError("GROQ_API_KEY not set in environment")
+        _clients["groq"] = Groq(api_key=api_key, max_retries=SDK_MAX_RETRIES)
 
-        _clients["groq"] = Groq(api_key=api_key)
-
-    kwargs = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    }
-
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
-
-    response = _clients["groq"].chat.completions.create(**kwargs)
-    content = response.choices[0].message.content
-
-    if not content:
-        raise ValueError("Groq returned an empty response")
-
-    return content
-
-
-def _call_anthropic(
-    system_prompt: str,
-    user_prompt: str,
-    model: str,
-    max_tokens: int,
-    json_mode: bool = False,
-) -> str:
-    if "anthropic" not in _clients:
-        import anthropic
-
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set in environment")
-
-        _clients["anthropic"] = anthropic.Anthropic(api_key=api_key)
-
-    response = _clients["anthropic"].messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
+    response = _clients["groq"].chat.completions.create(
+        **_chat_kwargs(system_prompt, user_prompt, model, max_tokens, temperature, json_mode)
     )
-
-    text_blocks = [
-        block.text
-        for block in response.content
-        if getattr(block, "type", None) == "text"
-    ]
-
-    if not text_blocks:
-        raise ValueError("Anthropic returned no text content")
-
-    return "\n".join(text_blocks)
+    choice = response.choices[0]
+    return choice.message.content or "", choice.finish_reason == "length"
 
 
-def _call_openai(
-    system_prompt: str,
-    user_prompt: str,
-    model: str,
-    max_tokens: int,
-    json_mode: bool = False,
-) -> str:
+def _call_openai(system_prompt, user_prompt, model, max_tokens, temperature, json_mode) -> Tuple[str, bool]:
     if "openai" not in _clients:
         from openai import OpenAI
 
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set in environment")
+        _clients["openai"] = OpenAI(api_key=api_key, max_retries=SDK_MAX_RETRIES)
 
-        _clients["openai"] = OpenAI(api_key=api_key)
+    response = _clients["openai"].chat.completions.create(
+        **_chat_kwargs(system_prompt, user_prompt, model, max_tokens, temperature, json_mode)
+    )
+    choice = response.choices[0]
+    return choice.message.content or "", choice.finish_reason == "length"
 
-    kwargs = {
+
+def _call_anthropic(system_prompt, user_prompt, model, max_tokens, temperature, json_mode) -> Tuple[str, bool]:
+    if "anthropic" not in _clients:
+        import anthropic
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not set in environment")
+        _clients["anthropic"] = anthropic.Anthropic(api_key=api_key, max_retries=SDK_MAX_RETRIES)
+
+    kwargs: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_prompt}],
     }
-
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
-
-    response = _clients["openai"].chat.completions.create(**kwargs)
-    content = response.choices[0].message.content
-
-    if not content:
-        raise ValueError("OpenAI returned an empty response")
-
-    return content
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    response = _clients["anthropic"].messages.create(**kwargs)
+    text = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+    return text, response.stop_reason == "max_tokens"
 
 
 _PROVIDER_FUNCS = {
@@ -153,56 +139,94 @@ _PROVIDER_FUNCS = {
 }
 
 
+def _complete(system_prompt, user_prompt, model, max_tokens, temperature, json_mode) -> Tuple[str, bool]:
+    provider = _get_provider()
+    if provider not in _PROVIDER_FUNCS:
+        raise RuntimeError(f"Unknown LLM_PROVIDER '{provider}' — use groq, anthropic, or openai")
+
+    resolved_model = model or _get_model(provider)
+    func = _PROVIDER_FUNCS[provider]
+    logger.debug("Calling %s with model %s (max_tokens=%d)", provider, resolved_model, max_tokens)
+
+    try:
+        return func(system_prompt, user_prompt, resolved_model, max_tokens, temperature, json_mode)
+    except Exception as exc:  # provider SDK errors
+        msg = str(exc).lower()
+        if json_mode and "json_validate_failed" in msg:
+            # Groq JSON mode: model produced invalid/truncated JSON
+            raise LLMResponseError(f"Provider rejected invalid JSON output: {exc}") from exc
+        if json_mode and "response_format" in msg:
+            logger.warning("Model does not support JSON mode; retrying without it")
+            return func(system_prompt, user_prompt, resolved_model, max_tokens, temperature, False)
+        raise
+
+
+# ----------------------------------------------------------------------
+# public API
+# ----------------------------------------------------------------------
+
 def call_llm(
     system_prompt: str,
     user_prompt: str,
     model: Optional[str] = None,
     max_tokens: int = 1024,
-    *,
+    temperature: Optional[float] = None,
     json_mode: bool = False,
 ) -> str:
-    """Return a raw response from the configured provider."""
-
-    provider = _get_provider()
-
-    if provider not in _PROVIDER_FUNCS:
-        raise ValueError(
-            f"Unknown LLM_PROVIDER '{provider}' — "
-            "use groq, anthropic, or openai"
-        )
-
-    resolved_model = model or _get_model(provider)
-
-    logger.debug(
-        "Calling %s with model %s (json_mode=%s)",
-        provider,
-        resolved_model,
-        json_mode,
-    )
-
-    return _PROVIDER_FUNCS[provider](
+    """Raw text response from whichever provider is configured in .env."""
+    text, truncated = _complete(
         system_prompt,
         user_prompt,
-        resolved_model,
+        model,
         max_tokens,
+        temperature,
         json_mode,
     )
+    if truncated:
+        logger.warning(
+            "LLM response was truncated at max_tokens=%d",
+            max_tokens,
+        )
+    return text
 
 
-def _clean_json_response(raw: str) -> str:
-    """Remove surrounding Markdown fences without changing JSON values."""
 
-    cleaned = raw.strip()
 
+def _parse_json(raw: str) -> Dict[str, Any]:
+    """Parse a JSON object, allowing fences or surrounding prose."""
     cleaned = re.sub(
-        r"\A```(?:json)?[ \t]*\r?\n?",
+        r"^```(?:json)?\s*|\s*```$",
         "",
-        cleaned,
+        (raw or "").strip(),
         flags=re.IGNORECASE,
     )
-    cleaned = re.sub(r"\r?\n?```[ \t]*\Z", "", cleaned)
 
-    return cleaned.strip()
+    try:
+        result = json.loads(cleaned)
+    except json.JSONDecodeError:
+        result = None
+
+    if result is None:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+
+        if start == -1 or end <= start:
+            raise LLMResponseError("LLM did not return valid JSON")
+
+        try:
+            result = json.loads(cleaned[start:end + 1])
+        except json.JSONDecodeError as exc:
+            raise LLMResponseError(
+                "LLM did not return valid JSON"
+            ) from exc
+
+    if not isinstance(result, dict):
+        raise LLMResponseError(
+            f"Expected a JSON object, got {type(result).__name__}"
+        )
+
+    return result
+
 
 
 def call_llm_json(
@@ -210,57 +234,52 @@ def call_llm_json(
     user_prompt: str,
     model: Optional[str] = None,
     max_tokens: int = 1024,
+    temperature: Optional[float] = 0.1,
 ) -> Dict[str, Any]:
     """
-    Call the configured provider and parse a JSON object.
-    Retry once if the response is invalid JSON.
+    Generate a JSON object.
+    Retry once for invalid JSON, but do not retry truncation
+    or provider/API failures as if they were parsing errors.
     """
-
+    provider = _get_provider()
+    json_mode = _json_mode_enabled() and provider in ("groq", "openai")
     last_error = None
 
     for attempt in range(2):
         retry_prompt = user_prompt
 
         if attempt == 1:
-            retry_prompt = (
-                user_prompt
-                + "\n\nIMPORTANT: Your previous response was not valid JSON. "
+            retry_prompt += (
+                "\n\nIMPORTANT: Your previous response was not valid JSON. "
                 "Regenerate the complete response from scratch. "
                 "Return exactly one valid JSON object. "
                 "Use double quotes for all JSON keys and string values. "
-                "Use valid JSON numbers such as 0.9, never words inside numbers. "
-                "Do not include Markdown fences, comments, or explanatory text. "
-                "Do not omit any required fields."
+                "Use valid JSON numbers. "
+                "Do not include Markdown fences, comments, or "
+                "explanatory text. Do not omit required fields."
             )
-
             logger.warning(
                 "Retrying LLM JSON generation after invalid response"
             )
 
-        raw = call_llm(
+        raw, truncated = _complete(
             system_prompt,
             retry_prompt,
-            model=model,
-            max_tokens=max_tokens,
-            json_mode=True,
+            model,
+            max_tokens,
+            temperature,
+            json_mode,
         )
 
-        cleaned = _clean_json_response(raw)
+        if truncated:
+            raise LLMTruncatedError(
+                f"LLM response truncated at max_tokens={max_tokens}"
+            )
 
         try:
-            result = json.loads(cleaned)
-
-            if not isinstance(result, dict):
-                raise ValueError(
-                    "Expected a JSON object at the top level, "
-                    f"got {type(result).__name__}"
-                )
-
-            return result
-
-        except (json.JSONDecodeError, ValueError) as exc:
+            return _parse_json(raw)
+        except LLMResponseError as exc:
             last_error = exc
-
             logger.warning(
                 "LLM JSON parse failed on attempt %s/2: %s",
                 attempt + 1,
@@ -269,11 +288,10 @@ def call_llm_json(
 
             if attempt == 1:
                 logger.error(
-                    "LLM returned invalid JSON after retry. "
-                    "Response excerpt: %s",
+                    "Invalid JSON after retry. Response excerpt: %s",
                     raw[:2000],
                 )
 
-    raise ValueError(
+    raise LLMResponseError(
         f"LLM did not return valid JSON after 2 attempts: {last_error}"
     ) from last_error
