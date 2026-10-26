@@ -494,3 +494,217 @@ def build_architecture_package(
     package_path = PACKAGE_DIR / "architecture_discovery_package.json"
     package_path.write_text(json.dumps(package, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     return package_path
+
+
+# ===========================================================================
+# Spec Synthesizer package
+# ===========================================================================
+STORY_TYPE = "spec_story"
+MAX_CWIS_PER_GROUP = 5
+
+
+def _slim_blueprint(bp: dict) -> dict:
+    """Only what story writing needs from a blueprint."""
+    return {
+        "summary": bp.get("summary"),
+        "mode": bp.get("mode"),
+        "components": [{k: c.get(k) for k in ("name", "change", "what_changes")} for c in bp.get("components") or []],
+        "interfaces": [{k: i.get(k) for k in ("name", "kind", "purpose")} for i in bp.get("interfaces") or []],
+        "data_changes": bp.get("data_changes") or [],
+        "integrations": [{k: i.get(k) for k in ("system", "change")} for i in bp.get("integrations") or []],
+        "nfrs": [{k: n.get(k) for k in ("category", "requirement")} for n in bp.get("nfrs") or []],
+        "recommended_option": bp.get("recommended_option"),
+        "risks": [r.get("risk") for r in bp.get("risks") or [] if r.get("risk")],
+        "open_questions": bp.get("open_questions") or [],
+    }
+
+
+def build_spec_package(
+    project_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    include_unready: bool = False,
+) -> Path:
+    """
+    Package for the Spec Synthesizer.
+
+    Work items are grouped by EPIC (one LLM call per group, max MAX_CWIS_PER_GROUP).
+    Each work item carries: its source tickets (key, type, existing acceptance criteria),
+    its architecture blueprint (slim), related work, decisions/gaps/open questions.
+    The project baseline (component names) is included so stories reference real components.
+    """
+    PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
+    project_key = project_id or "all"
+    pfilter = "AND metadata->>'project_id' = %s" if project_id else ""
+    pparams = [project_id] if project_id else []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT artifact_id, title, content, source_id, metadata FROM artifacts
+                WHERE artifact_type = %s AND COALESCE(metadata->>'lifecycle','active') = 'active' {pfilter}
+                ORDER BY title""", [CWI_TYPE, *pparams])
+            cwi_rows = cur.fetchall()
+
+            cur.execute(f"""
+                SELECT artifact_id, title, content, source_ref, metadata FROM artifacts
+                WHERE artifact_type = %s {pfilter}""", [SOURCE_TYPE, *pparams])
+            source_rows = cur.fetchall()
+
+            cur.execute(f"""
+                SELECT content, metadata FROM artifacts
+                WHERE artifact_type = %s AND COALESCE(metadata->>'lifecycle','active') = 'active' {pfilter}""",
+                        [BLUEPRINT_TYPE, *pparams])
+            blueprint_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT content, metadata FROM artifacts
+                WHERE artifact_type = %s AND source_ref = %s ORDER BY updated_at DESC LIMIT 1""",
+                        [BASELINE_TYPE, f"architecture-baseline:{project_key}"])
+            baseline_row = cur.fetchone()
+
+            cur.execute(f"""
+                SELECT artifact_id, metadata FROM artifacts
+                WHERE artifact_type = %s AND COALESCE(metadata->>'lifecycle','active') = 'active' {pfilter}""",
+                        [STORY_TYPE, *pparams])
+            story_rows = cur.fetchall()
+
+    # ---- sources -----------------------------------------------------------------
+    sources = {}
+    for aid, title, content, sref, meta in source_rows:
+        meta = _decode(meta)
+        parent = meta.get("parent") or {}
+        epic_key = meta.get("epic_key") or (parent.get("key") if (parent.get("type") or "").lower() == "epic" else None)
+        sources[str(aid)] = {
+            "artifact_id": str(aid),
+            "ref": sref,
+            "title": title,
+            "issue_type": meta.get("issue_type"),
+            "status": meta.get("status"),
+            "acceptance_criteria": meta.get("acceptance_criteria"),
+            "parent_key": parent.get("key"),
+            "epic_key": epic_key,
+            "content": content or "",
+        }
+
+    # ---- blueprints / baseline / existing stories -----------------------------------
+    blueprints = {}
+    for content, meta in blueprint_rows:
+        meta = _decode(meta)
+        if meta.get("cwi_artifact_id"):
+            blueprints[str(meta["cwi_artifact_id"])] = {
+                "fingerprint": meta.get("fingerprint"),
+                **_slim_blueprint(_decode(content)),
+            }
+
+    baseline = None
+    if baseline_row:
+        b, bmeta = _decode(baseline_row[0]), _decode(baseline_row[1])
+        baseline = {
+            "origin": bmeta.get("origin"),
+            "fingerprint": bmeta.get("fingerprint"),
+            "summary": b.get("summary"),
+            "components": [{"name": c.get("name"), "responsibility": c.get("responsibility")}
+                           for c in b.get("components") or []],
+            "nfrs": [{"category": n.get("category"), "requirement": n.get("requirement")}
+                     for n in b.get("nfrs") or []],
+            "constraints": [c.get("item") for c in b.get("constraints") or [] if c.get("item")],
+            "integrations": [i.get("name") for i in b.get("integrations") or [] if i.get("name")],
+        }
+
+    existing_stories: Dict[str, List[dict]] = {}
+    for aid, meta in story_rows:
+        meta = _decode(meta)
+        if meta.get("cwi_artifact_id"):
+            existing_stories.setdefault(str(meta["cwi_artifact_id"]), []).append(
+                {"artifact_id": str(aid), "fingerprint": meta.get("fingerprint")})
+
+    # ---- CWIs -----------------------------------------------------------------------
+    all_cwis = []
+    for aid, title, content, sid, meta in cwi_rows:
+        meta = _decode(meta)
+        all_cwis.append((str(aid), title, content, sid, meta))
+    ref_to_cwi = {ref: (aid, title, meta) for aid, title, _, _, meta in all_cwis
+                  for ref in meta.get("source_refs") or []}
+
+    eligible, skipped = [], []
+    for aid, title, content, sid, meta in all_cwis:
+        reason = _eligibility(meta, include_unready)
+        if reason:
+            skipped.append({"artifact_id": aid, "title": title, "reason": reason})
+            continue
+        members = [sources[m] for m in (str(x) for x in meta.get("member_artifact_ids") or []) if m in sources]
+        related = []
+        for dep in meta.get("dependencies") or []:
+            for ref in _REF_RE.findall(dep):
+                other = ref_to_cwi.get(ref)
+                if other and other[0] != aid:
+                    related.append({"ref": ref, "title": other[1], "relation": dep})
+        epic_key = next((m["epic_key"] for m in members if m.get("epic_key")), None)
+        eligible.append({
+            "artifact_id": aid,
+            "cwi_id": meta.get("cwi_id"),
+            "source_id": str(sid) if sid else None,
+            "title": title,
+            "summary": content or "",
+            "business_intent": meta.get("business_intent"),
+            "signal_type": meta.get("signal_type"),
+            "readiness": meta.get("readiness"),
+            "gaps": meta.get("gaps") or [],
+            "conflicts": meta.get("conflicts") or [],
+            "decisions": meta.get("decisions") or [],
+            "dependencies": meta.get("dependencies") or [],
+            "open_questions": meta.get("open_questions") or [],
+            "source_refs": meta.get("source_refs") or [],
+            "members": members,
+            "related": related,
+            "epic_key": epic_key,
+            "blueprint": blueprints.get(aid),
+        })
+
+    if limit:
+        eligible = eligible[:limit]
+
+    # ---- group by epic --------------------------------------------------------------
+    by_epic: Dict[str, List[dict]] = {}
+    for c in eligible:
+        by_epic.setdefault(c["epic_key"] or "_no_epic", []).append(c)
+
+    groups = []
+    for epic_key, items in sorted(by_epic.items()):
+        epic = ref_to_cwi.get(epic_key) if epic_key != "_no_epic" else None
+        epic_src = next((src for src in sources.values() if src["ref"] == epic_key), None)
+        epic_info = {
+            "ref": None if epic_key == "_no_epic" else epic_key,
+            "title": (epic[1] if epic else epic_src["title"] if epic_src
+                      else "No epic" if epic_key == "_no_epic" else epic_key),
+            "intent": (epic[2].get("business_intent") if epic else None),
+        }
+        for i in range(0, len(items), MAX_CWIS_PER_GROUP):
+            groups.append({"epic": epic_info, "work_items": items[i:i + MAX_CWIS_PER_GROUP]})
+
+    package = {
+        "package": {
+            "package_type": "agent_context",
+            "package_version": "1.0",
+            "target_agent": "planning.spec_synthesizer",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "project_id": project_id,
+        },
+        "context": {
+            "project_id": project_id,
+            "project_key": project_key,
+            "baseline": baseline,
+            "groups": groups,
+            "skipped_work_items": skipped,
+            "existing_stories": existing_stories,
+            "counts": {
+                "eligible_cwis": len(eligible),
+                "with_blueprint": sum(1 for c in eligible if c["blueprint"]),
+                "groups": len(groups),
+                "skipped_cwis": len(skipped),
+            },
+        },
+    }
+    path = PACKAGE_DIR / "spec_synthesizer_package.json"
+    path.write_text(json.dumps(package, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    return path
