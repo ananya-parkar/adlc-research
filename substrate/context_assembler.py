@@ -6,12 +6,17 @@ The agent does NOT query PostgreSQL directly.
 The substrate assembles the package and the agent consumes it.
 """
 
+import hashlib
 import json
+import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
+
 from substrate.db import get_connection
-from substrate.vector_store import search_similar
+
+logger = logging.getLogger(__name__)
 
 PACKAGE_DIR = (
     Path(__file__).resolve().parent.parent
@@ -214,213 +219,278 @@ def build_discovery_package() -> Path:
 
     return package_path
 
-def build_architecture_package(project_id: str | None = None, limit: int = 25,) -> Path:
+
+# ===========================================================================
+# Architecture package (v2)
+# ===========================================================================
+CWI_TYPE = "candidate_work_item"
+SOURCE_TYPE = "source_artifact"
+BASELINE_TYPE = "architecture_baseline"
+BLUEPRINT_TYPE = "architecture_blueprint"
+
+# CWIs that never get a blueprint: containers and background material.
+SKIP_SIGNALS = {"epic", "context"}
+
+# Architecture-document detection (Confluence pages / uploaded files only).
+# An explicit metadata flag always wins: metadata.doc_type == "architecture".
+ARCH_TITLE_WORDS = (
+    "architecture", "system design", "solution design", "technical design", "tech stack",
+    "high level design", "high-level design", "low level design", "hld", "lld",
+    "infrastructure", "deployment", "integration design", "data model",
+)
+ARCH_CONTENT_WORDS = (
+    "architecture", "microservice", "api gateway", "database", "postgres", "mysql", "mongodb",
+    "kubernetes", "docker", "deployment", "load balancer", "message queue", "kafka", "rabbitmq",
+    "redis", "aws", "azure", "gcp", "frontend", "backend", "service layer", "component",
+    "rest api", "graphql", "webhook", "data flow", "infrastructure", "ci/cd", "cdn", "cache",
+)
+ARCH_CONTENT_MIN_HITS = 5
+MAX_BASELINE_SOURCE_CHARS = 15000
+
+
+def _decode(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            out = json.loads(value)
+            return out if isinstance(out, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _fingerprint(*parts: Any) -> str:
+    raw = json.dumps(parts, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _architecture_reason(title: str, content: str, source_type: str, meta: dict) -> Optional[str]:
+    """Why this artifact counts as architecture material, or None."""
+    if (meta.get("doc_type") or "").lower() == "architecture":
+        return "tagged doc_type=architecture"
+    if source_type == "jira":
+        return None
+    t = (title or "").lower()
+    for word in ARCH_TITLE_WORDS:
+        if re.search(rf"\b{re.escape(word)}\b", t):
+            return f"title mentions '{word}'"
+    c = (content or "").lower()
+    hits = sorted({w for w in ARCH_CONTENT_WORDS if w in c})
+    if len(hits) >= ARCH_CONTENT_MIN_HITS:
+        return f"content mentions {', '.join(hits[:6])}"
+    return None
+
+
+def _eligibility(meta: dict, include_unready: bool) -> Optional[str]:
+    """Reason a CWI is skipped, or None if it should get a blueprint."""
+    if (meta.get("signal_type") or "") in SKIP_SIGNALS:
+        return f"{meta.get('signal_type')} (no blueprint needed)"
+    if meta.get("is_actionable") is False:
+        return "not actionable"
+    if not include_unready and meta.get("readiness") == "not_ready":
+        return "not_ready — refine it first"
+    if (meta.get("review_status") or "proposed") == "rejected":
+        return "rejected by product owner"
+    return None
+
+
+_REF_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+
+
+def build_architecture_package(
+    project_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    include_unready: bool = False,
+) -> Path:
+    """
+    Package for the Architecture Discovery & Blueprint Agent.
+
+    Contains:
+      * architecture_sources  — client architecture material (Confluence / files)
+      * candidate_work_items  — ACTIVE, eligible CWIs, each with its source tickets
+                                and related work (dependencies resolved to CWIs)
+      * skipped_work_items    — CWIs not needing a blueprint, with the reason
+      * existing_baseline     — the stored baseline (reused if still current)
+      * existing_blueprints   — stored blueprints per CWI (skipped if still current)
+    """
+    PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
+    project_key = project_id or "all"
+
     with get_connection() as conn:
         with conn.cursor() as cur:
-
-            # 1. Fetch persisted Candidate Work Items.
-            conditions = ["a.artifact_type = 'candidate_work_item'"]
-            params = []
-
-            if project_id:
-                conditions.append(
-                    "a.metadata->>'project_id' = %s"
-                )
-                params.append(project_id)
-
-            cur.execute(
-                f"""
-                SELECT
-                    a.artifact_id,
-                    a.title,
-                    a.content,
-                    a.source_id,
-                    a.source_ref,
-                    a.metadata,
-                    a.version,
-                    a.created_at,
-                    a.updated_at
-                FROM artifacts a
-                WHERE {" AND ".join(conditions)}
-                ORDER BY a.updated_at DESC
-                LIMIT %s
-                """,
-                [*params, limit],
-            )
-
+            # 1. Active CWIs
+            sql = f"""
+                SELECT artifact_id, title, content, source_id, source_ref, metadata, updated_at
+                FROM artifacts
+                WHERE artifact_type = %s
+                  AND COALESCE(metadata->>'lifecycle', 'active') = 'active'
+                  {"AND metadata->>'project_id' = %s" if project_id else ""}
+                ORDER BY title
+            """
+            cur.execute(sql, [CWI_TYPE, project_id] if project_id else [CWI_TYPE])
             cwi_rows = cur.fetchall()
 
-            cwis = []
-            member_ids = set()
+            # 2. Source artifacts of this project only (ingestion must tag project_id)
+            sql = f"""
+                SELECT a.artifact_id, a.title, a.content, a.source_id, a.source_ref,
+                       a.metadata, a.updated_at, cs.source_type
+                FROM artifacts a
+                LEFT JOIN context_sources cs ON cs.source_id = a.source_id
+                WHERE a.artifact_type = %s
+                  {"AND a.metadata->>'project_id' = %s" if project_id else ""}
+            """
+            cur.execute(sql, [SOURCE_TYPE, project_id] if project_id else [SOURCE_TYPE])
+            source_rows = cur.fetchall()
 
-            for row in cwi_rows:
-                metadata = row[5] or {}
+            # 3. Existing baseline + blueprints
+            cur.execute(
+                """
+                SELECT artifact_id, content, metadata FROM artifacts
+                WHERE artifact_type = %s AND source_ref = %s
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                [BASELINE_TYPE, f"architecture-baseline:{project_key}"],
+            )
+            baseline_row = cur.fetchone()
 
-                if isinstance(metadata, str):
-                    metadata = json.loads(metadata)
+            sql = f"""
+                SELECT artifact_id, metadata FROM artifacts
+                WHERE artifact_type = %s
+                  AND COALESCE(metadata->>'lifecycle', 'active') = 'active'
+                  {"AND metadata->>'project_id' = %s" if project_id else ""}
+            """
+            cur.execute(sql, [BLUEPRINT_TYPE, project_id] if project_id else [BLUEPRINT_TYPE])
+            blueprint_rows = cur.fetchall()
 
-                member_ids.update(
-                    str(member_id)
-                    for member_id in metadata.get(
-                        "member_artifact_ids", []
-                    )
-                )
+    # ---- source artifacts -------------------------------------------------
+    sources_by_id: Dict[str, dict] = {}
+    architecture_sources: List[dict] = []
+    for aid, title, content, sid, sref, meta, updated, stype in source_rows:
+        meta = _decode(meta)
+        doc = {
+            "artifact_id": str(aid),
+            "source_id": str(sid) if sid else None,
+            "source_type": stype or meta.get("source_type"),
+            "source_ref": sref,
+            "title": title,
+            "content": content or "",
+            "updated_at": updated.isoformat() if updated else None,
+        }
+        sources_by_id[doc["artifact_id"]] = doc
+        reason = _architecture_reason(title, content, doc["source_type"] or "", meta)
+        if reason:
+            architecture_sources.append({**doc, "detection_reason": reason})
 
-                cwis.append({
-                    "artifact_id": str(row[0]),
-                    "artifact_type": "candidate_work_item",
-                    "title": row[1],
-                    "content": row[2],
-                    "source_id": str(row[3]) if row[3] else None,
-                    "source_ref": row[4],
-                    "metadata": metadata,
-                    "version": row[6],
-                    "created_at": (
-                        row[7].isoformat() if row[7] else None
-                    ),
-                    "updated_at": (
-                        row[8].isoformat() if row[8] else None
-                    ),
-                })
+    architecture_sources.sort(key=lambda d: d["title"] or "")
+    total_chars = sum(len(d["content"]) for d in architecture_sources)
+    if total_chars > MAX_BASELINE_SOURCE_CHARS:
+        logger.warning("Architecture material is %d chars; prompts clip each document (see MAX_DOC_CHARS).",
+                       total_chars)
 
-            # 2. Fetch source artifacts linked to the CWIs.
-            source_artifacts = []
+    # ---- CWIs ----------------------------------------------------------------
+    all_cwis = []
+    for aid, title, content, sid, sref, meta, updated in cwi_rows:
+        meta = _decode(meta)
+        all_cwis.append({
+            "artifact_id": str(aid),
+            "cwi_id": meta.get("cwi_id"),
+            "source_id": str(sid) if sid else None,
+            "title": title,
+            "summary": content or "",
+            "business_intent": meta.get("business_intent"),
+            "signal_type": meta.get("signal_type"),
+            "readiness": meta.get("readiness"),
+            "review_status": meta.get("review_status") or "proposed",
+            "is_actionable": meta.get("is_actionable"),
+            "gaps": meta.get("gaps") or [],
+            "decisions": meta.get("decisions") or [],
+            "dependencies": meta.get("dependencies") or [],
+            "open_questions": meta.get("open_questions") or [],
+            "source_refs": meta.get("source_refs") or [],
+            "member_artifact_ids": [str(m) for m in meta.get("member_artifact_ids") or []],
+            "project_id": meta.get("project_id") or project_id,
+            "_meta": meta,
+        })
 
-            if member_ids:
-                cur.execute(
-                    """
-                    SELECT
-                        a.artifact_id,
-                        a.artifact_type,
-                        a.title,
-                        a.content,
-                        a.source_id,
-                        a.source_ref,
-                        a.metadata,
-                        a.version,
-                        a.created_at,
-                        a.updated_at,
-                        cs.source_type,
-                        cs.source_name
-                    FROM artifacts a
-                    LEFT JOIN context_sources cs
-                        ON cs.source_id = a.source_id
-                    WHERE a.artifact_id = ANY(%s::uuid[])
-                    ORDER BY a.updated_at DESC
-                    """,
-                    [list(member_ids)],
-                )
+    ref_to_cwi = {ref: c for c in all_cwis for ref in c["source_refs"]}
 
-                for row in cur.fetchall():
-                    metadata = row[6] or {}
-
-                    if isinstance(metadata, str):
-                        metadata = json.loads(metadata)
-
-                    source_artifacts.append({
-                        "artifact_id": str(row[0]),
-                        "artifact_type": row[1],
-                        "title": row[2],
-                        "content": row[3],
-                        "source_id": str(row[4]) if row[4] else None,
-                        "source_ref": row[5],
-                        "metadata": metadata,
-                        "version": row[7],
-                        "created_at": (
-                            row[8].isoformat() if row[8] else None
-                        ),
-                        "updated_at": (
-                            row[9].isoformat() if row[9] else None
-                        ),
-                        "source": {
-                            "source_type": row[10],
-                            "source_name": row[11],
-                            "source_id": (
-                                str(row[4]) if row[4] else None
-                            ),
-                            "source_ref": row[5],
-                        },
-                    })
-
-    # 3. Retrieve supporting knowledge chunks.
-    # Restrict results to source artifacts linked to the selected CWIs.
-    retrieved_chunks = []
-    allowed_artifact_ids = {
-        artifact["artifact_id"]
-        for artifact in source_artifacts
-    }
-
-    for cwi in cwis:
-        query = (
-            f"{cwi.get('title') or ''}\n"
-            f"{cwi.get('content') or ''}"
-        ).strip()
-
-        if not query or not allowed_artifact_ids:
+    eligible, skipped = [], []
+    for c in all_cwis:
+        reason = _eligibility(c.pop("_meta"), include_unready)
+        if reason:
+            skipped.append({"artifact_id": c["artifact_id"], "title": c["title"], "reason": reason})
             continue
+        c["members"] = [sources_by_id[m] for m in c["member_artifact_ids"] if m in sources_by_id]
+        related, seen = [], set()
+        for dep in c["dependencies"]:
+            for ref in _REF_RE.findall(dep):
+                other = ref_to_cwi.get(ref)
+                if other and other is not c and ref not in seen:
+                    seen.add(ref)
+                    related.append({"ref": ref, "title": other["title"],
+                                    "signal_type": other["signal_type"], "relation": dep})
+        c["related"] = related
+        eligible.append(c)
 
-        try:
-            chunks = search_similar(
-                query_text=query,
-                top_k=10,
-                project_id=project_id,
-            )
+    if limit:
+        eligible = eligible[:limit]
 
-            for chunk in chunks:
-                if str(chunk.get("artifact_id")) not in allowed_artifact_ids:
-                    continue
+    # ---- baseline fingerprint: what the baseline is built from -------------------
+    if architecture_sources:
+        mode = "discovery"
+        baseline_fp = _fingerprint("discovery", [(d["artifact_id"], d["updated_at"]) for d in architecture_sources])
+    else:
+        mode = "creation"
+        baseline_fp = _fingerprint("creation", sorted((c["artifact_id"], c["title"]) for c in eligible))
 
-                retrieved_chunks.append({
-                    **chunk,
-                    "for_cwi_artifact_id": cwi["artifact_id"],
-                })
+    existing_baseline = None
+    if baseline_row:
+        meta = _decode(baseline_row[2])
+        existing_baseline = {
+            "artifact_id": str(baseline_row[0]),
+            "fingerprint": meta.get("fingerprint"),
+            "origin": meta.get("origin"),
+            "baseline": _decode(baseline_row[1]),
+            "alias_to_id": meta.get("alias_to_id") or {},
+            "doc_aliases": meta.get("doc_aliases") or {},
+        }
 
-        except Exception:
-            # Source artifact content is still available if vector
-            # retrieval fails.
-            import logging
-            logging.getLogger(__name__).exception(
-                "Vector retrieval failed for CWI %s",
-                cwi["artifact_id"],
-            )
+    existing_blueprints = {}
+    for aid, meta in blueprint_rows:
+        meta = _decode(meta)
+        if meta.get("cwi_artifact_id"):
+            existing_blueprints[str(meta["cwi_artifact_id"])] = {
+                "artifact_id": str(aid), "fingerprint": meta.get("fingerprint"),
+            }
 
-    # 4. Assemble an agent-specific context package.
     package = {
         "package": {
             "package_type": "agent_context",
-            "package_version": "1.0",
-            "target_agent": (
-                "planning.architecture_discovery_blueprint_agent"
-            ),
-            "generated_at": datetime.now(
-                timezone.utc
-            ).isoformat(),
+            "package_version": "2.0",
+            "target_agent": "planning.architecture_discovery_blueprint_agent",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "project_id": project_id,
         },
         "context": {
-            "candidate_work_items": cwis,
-            "artifacts": source_artifacts,
-            "retrieved_chunks": retrieved_chunks,
+            "project_id": project_id,
+            "project_key": project_key,
+            "baseline_mode": mode,
+            "baseline_fingerprint": baseline_fp,
+            "architecture_sources": architecture_sources,
+            "candidate_work_items": eligible,
+            "skipped_work_items": skipped,
+            "existing_baseline": existing_baseline,
+            "existing_blueprints": existing_blueprints,
             "counts": {
-                "candidate_work_items": len(cwis),
-                "source_artifacts": len(source_artifacts),
-                "retrieved_chunks": len(retrieved_chunks),
+                "active_cwis": len(all_cwis),
+                "eligible_cwis": len(eligible),
+                "skipped_cwis": len(skipped),
+                "architecture_sources": len(architecture_sources),
             },
         },
     }
 
-    package_path = (
-        PACKAGE_DIR / "architecture_discovery_package.json"
-    )
-
-    package_path.write_text(
-        json.dumps(
-            package,
-            indent=2,
-            ensure_ascii=False,
-            default=str,
-        ),
-        encoding="utf-8",
-    )
-
+    package_path = PACKAGE_DIR / "architecture_discovery_package.json"
+    package_path.write_text(json.dumps(package, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     return package_path

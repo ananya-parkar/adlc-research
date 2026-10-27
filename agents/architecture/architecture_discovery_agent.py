@@ -1,634 +1,562 @@
+# agents/architecture/architecture_discovery_agent.py
+"""
+Architecture Discovery & Blueprint Agent (Planning phase) — v2
+
+Step A · BASELINE (once per project, reused while its inputs are unchanged)
+    discovery mode — client architecture material exists (Confluence pages / uploaded
+                     docs): reconstruct the current architecture from it.
+    creation mode  — no material: propose ONE shared solution architecture from the
+                     candidate work items, so every blueprint designs against it.
+
+Step B · BLUEPRINT (per eligible candidate work item)
+    How the change fits the baseline: components used / modified / new, interfaces,
+    data changes, integrations, NFRs, options, ADR candidates, risks.
+    Consumed by the Spec Synthesizer to write stories, acceptance criteria and NFRs.
+
+What changed vs v1
+  * Only ACTIVE, eligible CWIs (no superseded, epics, context, not_ready, rejected).
+  * No silent 25-item limit.
+  * Client architecture docs reach every blueprint (via the baseline).
+  * Related work (dependencies) is passed in, so shared enablers are reused, not redesigned.
+  * Slim prompts with short ids instead of the whole package as JSON (~3-4x fewer tokens).
+  * Resumable: CWIs whose blueprint is still current are skipped. A rerun after a
+    quota stop only does the missing ones.
+  * Rate limits: waits the provider's "try again in …" when short; stops cleanly when long.
+  * No fake success: an empty/invalid LLM answer is retried, never stored as a blueprint.
+
+Usage
+    python -m agents.architecture.architecture_discovery_agent --project-id KAN
+    python -m agents.architecture.architecture_discovery_agent --project-id KAN --dry-run
+    python -m agents.architecture.architecture_discovery_agent --project-id KAN --rebuild-baseline
+    python -m agents.architecture.architecture_discovery_agent --project-id KAN --force --limit 3
+"""
 
 import argparse
+import hashlib
 import json
 import logging
+import os
+import re
 import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from agents.architecture.prompts import (
-    ARCHITECTURE_SYSTEM_PROMPT,
-    build_architecture_user_prompt,
+from agents.architecture.prompts import (  # noqa: E402
+    BASELINE_CREATION_SYSTEM_PROMPT,
+    BASELINE_DISCOVERY_SYSTEM_PROMPT,
+    BLUEPRINT_SYSTEM_PROMPT,
+    baseline_as_text,
+    build_baseline_creation_prompt,
+    build_baseline_discovery_prompt,
+    build_blueprint_prompt,
 )
-from llm_client import call_llm_json
-from substrate.context_assembler import build_architecture_package
-from substrate.artifact_registry import upsert_artifact
-from substrate.context_registry import record_provenance
-from substrate.vector_store import store_chunks
+from llm_client import LLMResponseError, LLMTruncatedError, call_llm_json  # noqa: E402
+from substrate.artifact_registry import supersede_artifacts, upsert_artifact  # noqa: E402
+from substrate.context_assembler import build_architecture_package  # noqa: E402
+from substrate.context_registry import record_provenance  # noqa: E402
+from substrate.vector_store import store_chunks  # noqa: E402
 
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
-
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+for noisy in ("httpx", "httpcore", "sentence_transformers", "urllib3", "groq", "openai", "anthropic"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+BASELINE_TYPE = "architecture_baseline"
 BLUEPRINT_TYPE = "architecture_blueprint"
 
+BASELINE_MAX_TOKENS = int(os.environ.get("ARCH_BASELINE_MAX_TOKENS", 3500))
+BLUEPRINT_MAX_TOKENS = int(os.environ.get("ARCH_BLUEPRINT_MAX_TOKENS", 3000))
+MAX_TOKENS_CAP = int(os.environ.get("ARCH_MAX_TOKENS_CAP", 7000))
+MAX_RATE_LIMIT_WAIT = int(os.environ.get("ARCH_MAX_RATE_LIMIT_WAIT", 240))  # seconds
+REVIEW_CONFIDENCE = 0.70
+GREENFIELD_CONFIDENCE_CAP = 0.80
 
-def _decode_json(value):
-    """Decode a JSON object from a dictionary or JSON string."""
-    if isinstance(value, dict):
-        return value
+RESULTS_DIR = Path(__file__).resolve().parents[2] / "storage" / "architecture_results"
 
-    if isinstance(value, str):
+COMPONENT_CHANGES = {"use", "modify", "new"}
+
+
+class QuotaExhausted(Exception):
+    """Provider asks us to wait longer than we are willing to — stop the run cleanly."""
+
+
+class GenerationFailed(Exception):
+    """The LLM could not produce a usable answer after all attempts."""
+
+
+# ----------------------------------------------------------------------
+# LLM call with sensible failure handling
+# ----------------------------------------------------------------------
+_WAIT_RE = re.compile(r"try again in\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:([\d.]+)s)?", re.I)
+
+
+def _retry_after(message: str) -> Optional[float]:
+    m = _WAIT_RE.search(message)
+    if not m or not any(m.groups()):
+        return None
+    h, mins, secs = (float(x) if x else 0.0 for x in m.groups())
+    return h * 3600 + mins * 60 + secs
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return getattr(exc, "status_code", None) == 429 or "rate limit" in text or "rate_limit" in text
+
+
+def llm_json(system: str, user: str, max_tokens: int, attempts: int,
+             validate) -> dict:
+    """
+    Call the LLM and run `validate` on the answer. Retries on invalid output
+    and truncation (with a bigger token budget), waits out short rate limits,
+    raises QuotaExhausted on long ones and GenerationFailed when out of attempts.
+    """
+    tokens, tried, waits, last_error = max_tokens, 0, 0, None
+    while tried < attempts:
         try:
-            result = json.loads(value)
-            return result if isinstance(result, dict) else {}
-        except json.JSONDecodeError:
-            return {}
+            raw = call_llm_json(system, user, max_tokens=tokens)
+            return validate(raw)
+        except LLMTruncatedError as exc:
+            tried += 1
+            last_error = exc
+            tokens = min(int(tokens * 1.8), MAX_TOKENS_CAP)
+            logger.warning("Answer truncated — retrying with max_tokens=%d", tokens)
+        except (LLMResponseError, ValueError) as exc:
+            tried += 1
+            last_error = exc
+            logger.warning("Unusable answer (%s) — attempt %d/%d", str(exc)[:160], tried, attempts)
+        except Exception as exc:  # provider errors
+            if not _is_rate_limit(exc):
+                raise
+            wait = _retry_after(str(exc)) or 60
+            if wait > MAX_RATE_LIMIT_WAIT or waits >= 5:
+                raise QuotaExhausted(f"provider asks to wait {wait:.0f}s: {str(exc)[:200]}") from exc
+            waits += 1
+            logger.warning("Rate limited — waiting %.0fs as the provider asks", wait + 2)
+            time.sleep(wait + 2)
+    raise GenerationFailed(str(last_error))
 
-    return {}
+
+# ----------------------------------------------------------------------
+# helpers
+# ----------------------------------------------------------------------
+def _hash(*parts) -> str:
+    return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-def validate_blueprints(result: dict, package: dict) -> list:
-    """Validate blueprint evidence against the supplied context package."""
-    context = package["context"]
-    cwis = context["candidate_work_items"]
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
 
-    valid_evidence_ids = {
-        str(artifact["artifact_id"])
-        for artifact in context["artifacts"]
+
+def _dicts(value, required: str) -> List[dict]:
+    return [v for v in _list(value) if isinstance(v, dict) and str(v.get(required) or "").strip()]
+
+
+def _map_evidence(items: List[dict], alias_to_id: Dict[str, str]) -> None:
+    for item in items:
+        ev = [str(e).strip() for e in _list(item.get("evidence"))]
+        item["evidence"] = [e for e in dict.fromkeys(ev) if e in alias_to_id]
+
+
+def _all_evidence(obj: dict, keys) -> List[str]:
+    return sorted({e for k in keys for i in obj.get(k) or [] for e in i.get("evidence") or []})
+
+
+# ----------------------------------------------------------------------
+# Step A — baseline
+# ----------------------------------------------------------------------
+BASELINE_LIST_KEYS = {
+    "components": "name", "data_stores": "name", "integrations": "name",
+    "tech_stack": "layer", "deployment": "item", "constraints": "item", "nfrs": "requirement",
+}
+
+
+def _validate_baseline(raw: dict, mode: str, alias_to_id: Dict[str, str]) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("baseline is not an object")
+    out = {"summary": str(raw.get("summary") or "").strip()}
+    for key, required in BASELINE_LIST_KEYS.items():
+        out[key] = _dicts(raw.get(key), required)
+        _map_evidence(out[key], alias_to_id)
+    out["gaps"] = [str(g) for g in _list(raw.get("gaps"))]
+    out["open_questions"] = [str(q) for q in _list(raw.get("open_questions"))]
+    if not out["components"]:
+        raise ValueError("baseline has no components")
+    for c in out["components"]:
+        if mode == "creation":
+            c["status"] = "proposed"
+        elif c.get("status") not in ("existing", "planned"):
+            c["status"] = "existing"
+    return out
+
+
+def ensure_baseline(ctx: dict, args) -> Tuple[Optional[dict], str]:
+    """Return (baseline_record, how) where how is reused|generated|unavailable."""
+    mode, fp = ctx["baseline_mode"], ctx["baseline_fingerprint"]
+    existing = ctx.get("existing_baseline")
+    if existing and existing.get("fingerprint") == fp and not args.rebuild_baseline:
+        logger.info("Reusing architecture baseline (%s, %d components)",
+                    existing.get("origin"), len(existing["baseline"].get("components") or []))
+        return existing, "reused"
+
+    if mode == "discovery":
+        docs = ctx["architecture_sources"]
+        aliases = [f"D{i}" for i in range(1, len(docs) + 1)]
+        alias_to_id = {a: d["artifact_id"] for a, d in zip(aliases, docs)}
+        system, user = BASELINE_DISCOVERY_SYSTEM_PROMPT, build_baseline_discovery_prompt(docs, aliases)
+        logger.info("Step A: DISCOVERING architecture from %d client document(s): %s",
+                    len(docs), "; ".join(f"{d['title']} ({d['detection_reason']})" for d in docs))
+    else:
+        cwis = ctx["candidate_work_items"]
+        aliases = [f"C{i}" for i in range(1, len(cwis) + 1)]
+        alias_to_id = {a: c["artifact_id"] for a, c in zip(aliases, cwis)}
+        system, user = BASELINE_CREATION_SYSTEM_PROMPT, build_baseline_creation_prompt(cwis, aliases)
+        logger.info("Step A: no architecture documents found — PROPOSING a solution architecture "
+                    "from %d work items", len(cwis))
+
+    baseline = llm_json(system, user, BASELINE_MAX_TOKENS, attempts=args.retries + 1,
+                        validate=lambda raw: _validate_baseline(raw, mode, alias_to_id))
+    record = {
+        "artifact_id": None,
+        "fingerprint": fp,
+        "origin": "discovered" if mode == "discovery" else "proposed",
+        "baseline": baseline,
+        "alias_to_id": alias_to_id,
+        "doc_aliases": ({a: d["title"] for a, d in zip(aliases, ctx["architecture_sources"])}
+                        if mode == "discovery" else {}),
     }
-
-    valid_evidence_ids.update(
-        str(chunk["artifact_id"])
-        for chunk in context["retrieved_chunks"]
-        if chunk.get("artifact_id")
-    )
-
-    returned = {
-        str(item.get("cwi_artifact_id")): item
-        for item in result.get("blueprints", [])
-        if isinstance(item, dict)
-    }
-
-    validated = []
-
-    for cwi in cwis:
-        cwi_artifact_id = str(cwi["artifact_id"])
-        blueprint = returned.get(cwi_artifact_id, {})
-
-        if not blueprint:
-            logger.warning(
-                "No blueprint returned for CWI %s; "
-                "creating a review-required fallback.",
-                cwi_artifact_id,
-            )
-
-        evidence = blueprint.get("evidence_artifact_ids", [])
-
-        if not isinstance(evidence, list):
-            evidence = []
-
-        evidence = list(
-            dict.fromkeys(
-                str(item)
-                for item in evidence
-                if str(item) in valid_evidence_ids
-            )
-        )
-
-        try:
-            confidence = float(blueprint.get("confidence", 0.2))
-            confidence = max(0.0, min(1.0, confidence))
-        except (TypeError, ValueError):
-            confidence = 0.2
-
-        metadata = _decode_json(cwi.get("metadata"))
-
-        blueprint.update(
-            {
-                "cwi_artifact_id": cwi_artifact_id,
-                "cwi_id": metadata.get("cwi_id"),
-                "title": (
-                    blueprint.get("title")
-                    or cwi.get("title")
-                    or "Architecture Blueprint"
-                ),
-                "problem_statement": (
-                    blueprint.get("problem_statement")
-                    or cwi.get("content")
-                    or ""
-                ),
-                "confidence": confidence,
-                "needs_review": (
-                    bool(blueprint.get("needs_review", False))
-                    or confidence < 0.70
-                    or not evidence
-                ),
-                "evidence_artifact_ids": evidence,
-            }
-        )
-
-        validated.append(blueprint)
-
-    return validated
+    if not args.dry_run:
+        record["artifact_id"] = store_baseline(record, ctx)
+    return record, "generated"
 
 
-def persist_blueprint(
-    blueprint: dict,
-    cwi: dict,
-    project_id: str | None,
-) -> str:
-    """Persist a blueprint, provenance, and vector chunks."""
-    source_id = cwi.get("source_id")
-
-    if not source_id:
-        raise ValueError(
-            f"CWI {cwi['artifact_id']} has no source_id. "
-            "The artifact registry requires a source association."
-        )
-
-    metadata = {
-        "artifact_kind": BLUEPRINT_TYPE,
-        "cwi_artifact_id": blueprint["cwi_artifact_id"],
-        "cwi_id": blueprint.get("cwi_id"),
-        "current_state": blueprint.get("current_state", {}),
-        "affected_components": blueprint.get("affected_components", []),
-        "integration_points": blueprint.get("integration_points", []),
-        "constraints": blueprint.get("constraints", []),
-        "assumptions": blueprint.get("assumptions", []),
-        "open_questions": blueprint.get("open_questions", []),
-        "architecture_options": blueprint.get("architecture_options", []),
-        "recommended_option": blueprint.get("recommended_option"),
-        "architecture_blueprint": blueprint.get(
-            "architecture_blueprint", {}
-        ),
-        "adr_candidates": blueprint.get("adr_candidates", []),
-        "technical_risks": blueprint.get("technical_risks", []),
-        "confidence": blueprint["confidence"],
-        "needs_review": blueprint["needs_review"],
-        "reasoning_summary": blueprint.get("reasoning_summary", ""),
-        "evidence_artifact_ids": blueprint["evidence_artifact_ids"],
-        "project_id": project_id,
-    }
-
-    stable_ref = (
-        f"architecture-blueprint:{blueprint['cwi_artifact_id']}"
-    )
-
-    synthetic_artifact = {
-        "title": blueprint["title"],
-        "source_refs": [stable_ref],
-    }
+def store_baseline(record: dict, ctx: dict) -> str:
+    project_key = ctx["project_key"]
+    b = record["baseline"]
+    source_ids = [d["source_id"] for d in ctx["architecture_sources"] if d.get("source_id")] or \
+                 [c["source_id"] for c in ctx["candidate_work_items"] if c.get("source_id")]
+    evidence_ids = sorted({record["alias_to_id"][e] for e in _all_evidence(b, BASELINE_LIST_KEYS)})
 
     artifact_id = upsert_artifact(
-        cwi=synthetic_artifact,
-        source_id=source_id,
-        artifact_type=BLUEPRINT_TYPE,
-        content_override=json.dumps(
-            blueprint, ensure_ascii=False
-        ),
-        extra_metadata=metadata,
-        project_id=project_id,
-    )
-
-    record_provenance(
-        artifact_id=artifact_id,
-        source_id=source_id,
-        source_ref=cwi.get("source_ref") or cwi["artifact_id"],
-        extraction_method="architecture_discovery_agent",
-    )
-
-    store_chunks(
-        artifact_id,
-        json.dumps(blueprint, ensure_ascii=False),
-        project_id=project_id,
-        metadata={
-            "artifact_type": BLUEPRINT_TYPE,
-            "cwi_artifact_id": cwi["artifact_id"],
+        cwi={"title": f"Architecture baseline — {project_key}",
+             "source_refs": [f"architecture-baseline:{project_key}"]},
+        source_id=source_ids[0] if source_ids else None,
+        artifact_type=BASELINE_TYPE,
+        content_override=json.dumps(b, ensure_ascii=False),
+        extra_metadata={
+            "lifecycle": "active",
+            "origin": record["origin"],
+            "fingerprint": record["fingerprint"],
+            "component_count": len(b["components"]),
+            "evidence_artifact_ids": evidence_ids,
+            "needs_review": True,  # an architect should always confirm the baseline
+            "alias_to_id": record["alias_to_id"],
+            "doc_aliases": record["doc_aliases"],
         },
+        project_id=ctx["project_id"],
     )
-
+    for doc in ctx["architecture_sources"]:
+        record_provenance(artifact_id=artifact_id, source_id=doc.get("source_id"),
+                          source_ref=doc.get("source_ref"), extraction_method="architecture_baseline")
+    store_chunks(artifact_id, baseline_as_text(b, record["origin"]), project_id=ctx["project_id"],
+                 metadata={"artifact_type": BASELINE_TYPE})
+    logger.info("Stored architecture baseline (%s) artifact_id=%s", record["origin"], artifact_id)
     return artifact_id
 
 
-def _build_single_cwi_package(package: dict, cwi: dict) -> dict:
-    """Keep one CWI and its associated evidence in the prompt."""
-    context = package["context"]
-    cwi_metadata = _decode_json(cwi.get("metadata"))
+# ----------------------------------------------------------------------
+# Step B — blueprints
+# ----------------------------------------------------------------------
+BLUEPRINT_EVIDENCE_KEYS = ("components", "integrations", "nfrs")
 
-    member_ids = {
-        str(artifact_id)
-        for artifact_id in cwi_metadata.get("member_artifact_ids", [])
-    }
 
-    source_artifacts = [
-        artifact
-        for artifact in context["artifacts"]
-        if str(artifact.get("artifact_id")) in member_ids
-    ]
+def _validate_blueprint(raw: dict, alias_to_id: Dict[str, str], baseline: Optional[dict]) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("blueprint is not an object")
+    summary = str(raw.get("summary") or "").strip()
+    components = _dicts(raw.get("components"), "name")
+    interfaces = _dicts(raw.get("interfaces"), "name")
+    if not summary or not (components or interfaces):
+        raise ValueError("blueprint has no summary or no components/interfaces")
 
-    retrieved_chunks = [
-        chunk
-        for chunk in context["retrieved_chunks"]
-        if str(chunk.get("artifact_id")) in member_ids
-    ]
+    known = {c["name"].strip().lower() for c in (baseline or {}).get("components") or []}
+    known |= {i["name"].strip().lower() for i in (baseline or {}).get("integrations") or []}
+    for c in components:
+        if c.get("change") not in COMPONENT_CHANGES:
+            c["change"] = "modify"
+        c["in_baseline"] = c["name"].strip().lower() in known
+    integrations = _dicts(raw.get("integrations"), "system")
+    nfrs = _dicts(raw.get("nfrs"), "requirement")
+    for group in (components, integrations, nfrs):
+        _map_evidence(group, alias_to_id)
 
+    try:
+        confidence = max(0.0, min(1.0, float(raw.get("confidence", 0.0))))
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    options = _dicts(raw.get("options"), "name")[:2]
+    recommended = raw.get("recommended_option") if options else None
     return {
-        **package,
-        "context": {
-            **context,
-            "candidate_work_items": [cwi],
-            "artifacts": source_artifacts,
-            "retrieved_chunks": retrieved_chunks,
-        },
+        "summary": summary,
+        "components": components,
+        "interfaces": interfaces,
+        "data_changes": _dicts(raw.get("data_changes"), "store"),
+        "integrations": integrations,
+        "nfrs": nfrs,
+        "options": options,
+        "recommended_option": recommended,
+        "adr_candidates": _dicts(raw.get("adr_candidates"), "title"),
+        "risks": _dicts(raw.get("risks"), "risk"),
+        "assumptions": [str(a) for a in _list(raw.get("assumptions"))],
+        "open_questions": [str(q) for q in _list(raw.get("open_questions"))],
+        "confidence": confidence,
     }
 
 
-def generate_for_cwi(
-    package: dict,
-    cwi: dict,
-) -> list:
-    """Generate and validate architecture output for one CWI."""
-    single_package = _build_single_cwi_package(package, cwi)
+def generate_blueprint(cwi: dict, baseline_rec: Optional[dict], args) -> dict:
+    members = cwi.get("members") or []
+    aliases = [m.get("source_ref") or f"S{i}" for i, m in enumerate(members, 1)]
+    alias_to_id = {a: m["artifact_id"] for a, m in zip(aliases, members)}
+    doc_aliases = (baseline_rec or {}).get("doc_aliases") or {}
+    # baseline document ids are valid evidence too (only known when generated this run)
+    for a in doc_aliases:
+        if a in (baseline_rec or {}).get("alias_to_id", {}):
+            alias_to_id[a] = baseline_rec["alias_to_id"][a]
 
-    result = call_llm_json(
-        ARCHITECTURE_SYSTEM_PROMPT,
-        build_architecture_user_prompt(single_package),
-        max_tokens=4096,
+    baseline = (baseline_rec or {}).get("baseline")
+    user = build_blueprint_prompt(cwi, members, aliases, cwi.get("related") or [],
+                                  baseline_as_text(baseline, (baseline_rec or {}).get("origin")), doc_aliases)
+    bp = llm_json(BLUEPRINT_SYSTEM_PROMPT, user, BLUEPRINT_MAX_TOKENS, attempts=args.retries + 1,
+                  validate=lambda raw: _validate_blueprint(raw, alias_to_id, baseline))
+
+    # A design against a *proposed* baseline (or none) rests on assumptions, not on a real system.
+    if (baseline_rec or {}).get("origin") != "discovered":
+        bp["confidence"] = min(bp["confidence"], GREENFIELD_CONFIDENCE_CAP)
+
+    evidence_aliases = _all_evidence(bp, BLUEPRINT_EVIDENCE_KEYS)
+    unknown = [c["name"] for c in bp["components"] if c["change"] != "new" and not c["in_baseline"]]
+    if unknown and baseline:
+        bp["assumptions"].append(f"Not in the baseline but treated as existing: {', '.join(unknown)}")
+
+    bp.update({
+        "cwi_artifact_id": cwi["artifact_id"],
+        "cwi_id": cwi.get("cwi_id"),
+        "title": cwi["title"],
+        "mode": {"discovered": "extend_existing", "proposed": "greenfield"}.get(
+            (baseline_rec or {}).get("origin"), "no_baseline"),
+        "baseline_artifact_id": (baseline_rec or {}).get("artifact_id"),
+        "related_work": [{"ref": r["ref"], "title": r["title"], "relation": r["relation"]}
+                         for r in cwi.get("related") or []],
+        "evidence_artifact_ids": sorted({alias_to_id[a] for a in evidence_aliases}),
+        "evidence_refs": evidence_aliases,
+    })
+    bp["needs_review"] = bool(
+        bp["confidence"] < REVIEW_CONFIDENCE
+        or not bp["evidence_artifact_ids"]
+        or bp["open_questions"]
+        or (unknown and baseline)
     )
-
-    return validate_blueprints(result, single_package)
-
-
-def generate_with_retries(
-    package: dict,
-    cwi: dict,
-    retries: int,
-    retry_base_seconds: int,
-) -> list:
-    """
-    Retry only this CWI after failures.
-
-    retries=2 means at most 3 total attempts.
-    Delays grow exponentially between attempts.
-    """
-    cwi_id = str(cwi["artifact_id"])
-    title = cwi.get("title", cwi_id)
-
-    for attempt in range(retries + 1):
-        try:
-            logger.info(
-                "Generating blueprint for '%s' (attempt %d/%d)",
-                title,
-                attempt + 1,
-                retries + 1,
-            )
-
-            blueprints = generate_for_cwi(package, cwi)
-
-            if not blueprints:
-                raise ValueError(
-                    f"No blueprint output returned for CWI {cwi_id}"
-                )
-
-            return blueprints
-
-        except Exception as exc:
-            if attempt >= retries:
-                logger.error(
-                    "All generation attempts failed for CWI %s (%s): %s",
-                    cwi_id,
-                    title,
-                    exc,
-                    exc_info=True,
-                )
-                return []
-
-            delay = retry_base_seconds * (2 ** attempt)
-
-            logger.warning(
-                "Generation attempt %d failed for CWI %s: %s. "
-                "Retrying in %d seconds.",
-                attempt + 1,
-                cwi_id,
-                exc,
-                delay,
-            )
-
-            time.sleep(delay)
-
-    return []
+    return bp
 
 
+def _blueprint_text(bp: dict) -> str:
+    lines = [bp["title"], bp["summary"]]
+    lines += [f"{c['change']}: {c['name']} — {c.get('what_changes', '')}" for c in bp["components"]]
+    lines += [f"NFR {n.get('category')}: {n['requirement']}" for n in bp["nfrs"]]
+    return "\n".join(lines)
+
+
+def store_blueprint(bp: dict, cwi: dict, fingerprint: str, project_id: Optional[str]) -> str:
+    if not cwi.get("source_id"):
+        raise ValueError(f"CWI {cwi['artifact_id']} has no source_id")
+    artifact_id = upsert_artifact(
+        cwi={"title": bp["title"], "source_refs": [f"architecture-blueprint:{cwi['artifact_id']}"]},
+        source_id=cwi["source_id"],
+        artifact_type=BLUEPRINT_TYPE,
+        content_override=json.dumps(bp, ensure_ascii=False),
+        extra_metadata={
+            "lifecycle": "active",
+            "cwi_artifact_id": cwi["artifact_id"],
+            "cwi_id": cwi.get("cwi_id"),
+            "mode": bp["mode"],
+            "baseline_artifact_id": bp["baseline_artifact_id"],
+            "fingerprint": fingerprint,
+            "confidence": bp["confidence"],
+            "needs_review": bp["needs_review"],
+            "component_changes": {k: sum(1 for c in bp["components"] if c["change"] == k)
+                                  for k in COMPONENT_CHANGES},
+            "evidence_artifact_ids": bp["evidence_artifact_ids"],
+        },
+        project_id=project_id,
+    )
+    record_provenance(artifact_id=artifact_id, source_id=cwi["source_id"],
+                      source_ref=cwi["artifact_id"], extraction_method="architecture_blueprint")
+    store_chunks(artifact_id, _blueprint_text(bp), project_id=project_id,
+                 metadata={"artifact_type": BLUEPRINT_TYPE, "cwi_artifact_id": cwi["artifact_id"]})
+    return artifact_id
+
+
+# ----------------------------------------------------------------------
+# report + results
+# ----------------------------------------------------------------------
+def print_report(ctx, baseline_rec, how, results, skipped_current, pending, failures):
+    print("\n" + "=" * 80)
+    print(f"  ARCHITECTURE REPORT — project {ctx['project_key']}")
+    print("=" * 80)
+    if baseline_rec:
+        b = baseline_rec["baseline"]
+        print(f"\nBaseline: {baseline_rec['origin']} ({how}) — {len(b['components'])} components")
+        print(f"  {b.get('summary', '')}")
+        for c in b["components"]:
+            print(f"  • {c['name']} [{c.get('type')}, {c.get('status')}]: {c.get('responsibility')}")
+        if b.get("gaps"):
+            print(f"  gaps: {'; '.join(b['gaps'])}")
+    else:
+        print("\nBaseline: unavailable")
+
+    print(f"\nBlueprints ({len(results)} generated, {len(skipped_current)} already current)")
+    for bp in results:
+        ch = {k: sum(1 for c in bp["components"] if c["change"] == k) for k in ("new", "modify", "use")}
+        flag = "REVIEW" if bp["needs_review"] else "ok"
+        print(f"\n  {bp['title']}  ({bp['mode']}, conf {bp['confidence']:.2f})  [{flag}]")
+        print(f"    components: {ch['new']} new · {ch['modify']} modify · {ch['use']} use   "
+              f"nfrs: {len(bp['nfrs'])}   risks: {len(bp['risks'])}")
+        if bp["related_work"]:
+            print(f"    related: {', '.join(r['ref'] for r in bp['related_work'])}")
+        if bp["open_questions"]:
+            print(f"    open questions: {'; '.join(bp['open_questions'][:3])}")
+
+    if ctx["skipped_work_items"]:
+        print("\nNot designed (by rule)")
+        for s in ctx["skipped_work_items"]:
+            print(f"  - {s['title']}: {s['reason']}")
+    if failures:
+        print("\nFailed")
+        for title, reason in failures.items():
+            print(f"  ✗ {title}: {reason}")
+    if pending:
+        print(f"\nPending (run again later to continue): {', '.join(pending)}")
+    print()
+
+
+def save_results(ctx, baseline_rec, results, dry_run) -> Path:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RESULTS_DIR / f"{ctx['project_key']}_{datetime.now():%Y%m%d_%H%M%S}.json"
+    path.write_text(json.dumps({
+        "project_id": ctx["project_id"], "dry_run": dry_run,
+        "baseline": {k: baseline_rec[k] for k in ("origin", "baseline")} if baseline_rec else None,
+        "skipped_work_items": ctx["skipped_work_items"],
+        "blueprints": results,
+    }, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    logger.info("Results saved to %s", path)
+    return path
+
+
+# ----------------------------------------------------------------------
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run Architecture Discovery with targeted retries "
-            "and accurate completion reporting."
-        )
-    )
+    p = argparse.ArgumentParser(description="Architecture Discovery & Blueprint Agent")
+    p.add_argument("--project-id", default=None, help="e.g. KAN")
+    p.add_argument("--limit", type=int, default=None, help="only the first N eligible CWIs (testing)")
+    p.add_argument("--retries", type=int, default=2, help="extra attempts per LLM call")
+    p.add_argument("--dry-run", action="store_true", help="generate and print, write nothing")
+    p.add_argument("--force", action="store_true", help="regenerate blueprints even if current")
+    p.add_argument("--rebuild-baseline", action="store_true", help="regenerate the baseline")
+    p.add_argument("--include-unready", action="store_true", help="also design not_ready CWIs")
+    args = p.parse_args()
 
-    parser.add_argument(
-        "--project-id",
-        default=None,
-        help="Project filter, e.g. KAN.",
-    )
-
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=25,
-        help="Maximum number of CWIs to process.",
-    )
-
-    parser.add_argument(
-        "--retries",
-        type=int,
-        default=2,
-        help="Additional generation attempts per failed CWI. Default: 2.",
-    )
-
-    parser.add_argument(
-        "--retry-base-seconds",
-        type=int,
-        default=15,
-        help="Base delay for exponential backoff. Default: 15 seconds.",
-    )
-
-    args = parser.parse_args()
-
-    if args.limit < 1:
-        parser.error("--limit must be at least 1")
-
-    if args.retries < 0:
-        parser.error("--retries cannot be negative")
-
-    if args.retry_base_seconds < 1:
-        parser.error("--retry-base-seconds must be at least 1")
-
-    # Stage 1: Common Substrate -> architecture context package.
-    package_path = build_architecture_package(
-        project_id=args.project_id,
-        limit=args.limit,
-    )
-
-    package = json.loads(
-        package_path.read_text(encoding="utf-8")
-    )
-
-    context = package["context"]
-    cwis = context["candidate_work_items"]
-
-    logger.info(
-        "Architecture context package built: %s",
-        package_path,
-    )
-
-    logger.info(
-        "Package contains %d CWIs, %d source artifacts, "
-        "%d retrieved chunks",
-        len(cwis),
-        len(context["artifacts"]),
-        len(context["retrieved_chunks"]),
-    )
+    package_path = build_architecture_package(project_id=args.project_id, limit=args.limit,
+                                              include_unready=args.include_unready)
+    ctx = json.loads(package_path.read_text(encoding="utf-8"))["context"]
+    cwis = ctx["candidate_work_items"]
+    logger.info("Architecture context package built: %s", package_path)
+    logger.info("Package contains %d CWIs (%d skipped by rule), %d architecture document(s)",
+                len(cwis), len(ctx["skipped_work_items"]), len(ctx["architecture_sources"]))
 
     if not cwis:
-        logger.warning(
-            "No candidate_work_item artifacts found. "
-            "Run Discovery Agent first and verify project scoping."
-        )
+        logger.warning("No eligible candidate work items. Run the Discovery Agent first.")
         return 0
 
-    # Stage 2: Generate one blueprint per CWI.
-    # Each failed CWI is retried independently.
-    blueprints_by_cwi = {}
-    generation_failures = {}
+    # ---- Step A
+    baseline_rec, how = None, "unavailable"
+    try:
+        baseline_rec, how = ensure_baseline(ctx, args)
+    except QuotaExhausted as exc:
+        logger.error("Stopped before the baseline: %s", exc)
+        return 3
+    except GenerationFailed as exc:
+        logger.error("Baseline generation failed (%s) — continuing without a baseline", exc)
 
-    for index, cwi in enumerate(cwis, start=1):
-        cwi_id = str(cwi["artifact_id"])
-        title = cwi.get("title", cwi_id)
+    baseline_fp = (baseline_rec or {}).get("fingerprint", "none")
 
-        logger.info(
-            "Processing architecture CWI %d/%d: %s",
-            index,
-            len(cwis),
-            title,
-        )
-
-        generated = generate_with_retries(
-            package=package,
-            cwi=cwi,
-            retries=args.retries,
-            retry_base_seconds=args.retry_base_seconds,
-        )
-
-        if generated:
-            blueprints_by_cwi[cwi_id] = generated
-            generation_failures.pop(cwi_id, None)
-        else:
-            generation_failures[cwi_id] = title
-
-    # Stage 3: Retry ONLY failed CWIs.
-    # Successful generations are not sent to the LLM again.
-    if generation_failures:
-        logger.warning(
-            "%d CWI(s) still failed generation. "
-            "Starting a targeted recovery pass.",
-            len(generation_failures),
-        )
-
-    recovery_round = 0
-    max_recovery_rounds = 2
-
-    while generation_failures and recovery_round < max_recovery_rounds:
-        recovery_round += 1
-        delay = args.retry_base_seconds * (2 ** (recovery_round - 1))
-
-        logger.info(
-            "Recovery round %d/%d: retrying %d failed CWI(s) "
-            "after %d seconds.",
-            recovery_round,
-            max_recovery_rounds,
-            len(generation_failures),
-            delay,
-        )
-
-        time.sleep(delay)
-
-        failed_ids = list(generation_failures.keys())
-
-        for cwi_id in failed_ids:
-            cwi = next(
-                (
-                    item for item in cwis
-                    if str(item["artifact_id"]) == cwi_id
-                ),
-                None,
-            )
-
-            if cwi is None:
-                logger.error(
-                    "Failed CWI %s is no longer in the context package.",
-                    cwi_id,
-                )
-                continue
-
-            title = cwi.get("title", cwi_id)
-
-            logger.info(
-                "Recovery round %d: retrying CWI '%s'",
-                recovery_round,
-                title,
-            )
-
-            # One attempt in each recovery round. The SDK may also
-            # perform its own internal HTTP retries.
-            try:
-                generated = generate_for_cwi(package, cwi)
-
-                if generated:
-                    blueprints_by_cwi[cwi_id] = generated
-                    generation_failures.pop(cwi_id, None)
-
-                    logger.info(
-                        "Recovery succeeded for CWI '%s'",
-                        title,
-                    )
-                else:
-                    logger.warning(
-                        "Recovery returned no blueprint for CWI '%s'",
-                        title,
-                    )
-
-            except Exception as exc:
-                logger.error(
-                    "Recovery round %d failed for CWI %s (%s): %s",
-                    recovery_round,
-                    cwi_id,
-                    title,
-                    exc,
-                    exc_info=True,
-                )
-
-    # Stage 4: Persist generated blueprints.
-    cwi_by_id = {
-        str(cwi["artifact_id"]): cwi
-        for cwi in cwis
-    }
-
-    persisted_cwi_ids = set()
-    persistence_failures = {}
-
-    total_generated = sum(
-        len(items) for items in blueprints_by_cwi.values()
-    )
-
-    logger.info(
-        "Architecture reasoning produced %d blueprint(s) "
-        "for %d/%d CWIs",
-        total_generated,
-        len(blueprints_by_cwi),
-        len(cwis),
-    )
-
-    for cwi_id, generated_blueprints in blueprints_by_cwi.items():
-        cwi = cwi_by_id.get(cwi_id)
-
-        if cwi is None:
-            logger.error(
-                "Cannot persist blueprint: CWI %s was not found",
-                cwi_id,
-            )
-            persistence_failures[cwi_id] = "CWI not found"
+    # ---- Step B
+    results, skipped_current, failures, pending = [], [], {}, []
+    stored_ids: List[str] = []
+    stopped = False
+    for n, cwi in enumerate(cwis, 1):
+        title = cwi["title"]
+        if stopped:
+            pending.append(title)
+            continue
+        fp = _hash(baseline_fp, {k: cwi.get(k) for k in (
+            "title", "summary", "business_intent", "decisions", "gaps", "dependencies",
+            "open_questions", "member_artifact_ids")})
+        existing = ctx["existing_blueprints"].get(cwi["artifact_id"])
+        if existing and existing.get("fingerprint") == fp and not args.force:
+            skipped_current.append(title)
+            stored_ids.append(existing["artifact_id"])
+            logger.info("Processing architecture CWI %d/%d: %s — already current, skipped", n, len(cwis), title)
             continue
 
-        cwi_metadata = _decode_json(cwi.get("metadata"))
+        logger.info("Processing architecture CWI %d/%d: %s", n, len(cwis), title)
+        try:
+            bp = generate_blueprint(cwi, baseline_rec, args)
+        except QuotaExhausted as exc:
+            logger.error("Provider quota reached — stopping. %s", exc)
+            stopped = True
+            pending.append(title)
+            continue
+        except GenerationFailed as exc:
+            failures[title] = f"generation failed: {exc}"
+            logger.error("Architecture generation failed for CWI %s: %s", title, exc)
+            continue
 
-        project_id = (
-            args.project_id
-            or cwi_metadata.get("project_id")
-        )
+        results.append(bp)
+        if args.dry_run:
+            continue
+        try:
+            aid = store_blueprint(bp, cwi, fp, ctx["project_id"])
+            stored_ids.append(aid)
+            logger.info("Created/updated blueprint '%s' (artifact_id=%s, confidence=%.2f, needs_review=%s)",
+                        title, aid, bp["confidence"], bp["needs_review"])
+        except Exception as exc:
+            failures[title] = f"storage failed: {exc}"
+            logger.exception("Failed to store blueprint for %s", title)
 
-        all_persisted = True
+    # Blueprints for CWIs that are no longer eligible/active → superseded.
+    # Existing blueprints of eligible CWIs are always kept, so a partial run never loses work.
+    if not args.dry_run and not args.limit:
+        keep = set(stored_ids) | {
+            ctx["existing_blueprints"][c["artifact_id"]]["artifact_id"]
+            for c in cwis if c["artifact_id"] in ctx["existing_blueprints"]
+        }
+        old = supersede_artifacts(BLUEPRINT_TYPE, ctx["project_id"], sorted(keep)) if ctx["project_id"] else 0
+        if old:
+            logger.info("Marked %d blueprint(s) of no-longer-eligible CWIs as superseded", old)
 
-        for blueprint in generated_blueprints:
-            try:
-                artifact_id = persist_blueprint(
-                    blueprint,
-                    cwi,
-                    project_id,
-                )
+    print_report(ctx, baseline_rec, how, results, skipped_current, pending, failures)
+    save_results(ctx, baseline_rec, results, args.dry_run)
 
-                logger.info(
-                    "Created/updated blueprint '%s' "
-                    "(artifact_id=%s, confidence=%.2f, needs_review=%s)",
-                    blueprint["title"],
-                    artifact_id,
-                    blueprint["confidence"],
-                    blueprint["needs_review"],
-                )
-
-            except Exception as exc:
-                all_persisted = False
-
-                logger.error(
-                    "Failed to persist blueprint for CWI %s: %s",
-                    cwi_id,
-                    exc,
-                    exc_info=True,
-                )
-
-        if all_persisted:
-            persisted_cwi_ids.add(cwi_id)
-            persistence_failures.pop(cwi_id, None)
-        else:
-            persistence_failures[cwi_id] = (
-                "One or more blueprint persistence operations failed"
-            )
-
-    # Stage 5: Final accounting against ALL input CWIs.
-    unresolved = {}
-
-    for cwi_id, title in generation_failures.items():
-        unresolved[cwi_id] = f"{title}: generation failed"
-
-    for cwi_id, reason in persistence_failures.items():
-        unresolved[cwi_id] = (
-            f"{cwi_by_id.get(cwi_id, {}).get('title', cwi_id)}: {reason}"
-        )
-
-    successful_cwis = len(persisted_cwi_ids)
-    failed_cwis = len(cwis) - successful_cwis
-
-    logger.info("=" * 72)
-    logger.info("ARCHITECTURE DISCOVERY FINAL SUMMARY")
-    logger.info("=" * 72)
-    logger.info("Input CWIs: %d", len(cwis))
-    logger.info("CWIs with generated blueprints: %d", len(blueprints_by_cwi))
-    logger.info("Blueprints generated: %d", total_generated)
-    logger.info("CWIs with successfully stored blueprints: %d", successful_cwis)
-    logger.info("CWIs unresolved: %d", failed_cwis)
-    logger.info("Generation failures remaining: %d", len(generation_failures))
-    logger.info("Persistence failures: %d", len(persistence_failures))
-
-    if unresolved:
-        logger.warning("Unresolved CWIs:")
-        for cwi_id, reason in unresolved.items():
-            logger.warning("  CWI %s — %s", cwi_id, reason)
-
-    if failed_cwis == 0:
-        logger.info(
-            "Architecture Discovery complete: %d/%d CWIs successfully stored",
-            successful_cwis,
-            len(cwis),
-        )
-        return 0
-
-    logger.error(
-        "Architecture Discovery incomplete: %d/%d CWIs successfully stored; "
-        "%d remain unresolved.",
-        successful_cwis,
-        len(cwis),
-        failed_cwis,
-    )
-
-    return 2
+    done = len(results) + len(skipped_current) - sum(1 for t in failures if "storage" in failures[t])
+    logger.info("Architecture Discovery complete: %d/%d blueprints stored%s", done, len(cwis),
+                " (dry run)" if args.dry_run else "")
+    if stopped:
+        return 3
+    return 0 if not failures else 2
 
 
 if __name__ == "__main__":

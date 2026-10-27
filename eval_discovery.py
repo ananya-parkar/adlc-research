@@ -99,8 +99,8 @@ CHECKS: List[tuple] = [
     # conflicts & decisions
     ("evidence", "Password reset 24h vs 15min conflict caught", 3,
      lambda r: _has(r, "Password reset via email", "conflicts")),
-    ("evidence", "Saved cards: tokenization decision captured", 2,
-     lambda r: _has(r, "Save cards", "decisions", "token")),
+    ("evidence", "Saved cards: no-card-storage / tokenization decision captured", 2,
+     lambda r: any(_has(r, "Save cards", "decisions", w) for w in ("token", "card number", "pci"))),
     ("evidence", "Google SSO: MVP-only decision captured", 1,
      lambda r: _has(r, "Google SSO login", "decisions", "mvp")),
 

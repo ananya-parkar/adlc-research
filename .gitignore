@@ -4,3 +4,8 @@ sync_state.json
 __pycache__/
 storage/discovery_results/
 storage/packages/
+
+storage/packages/
+storage/architecture_results/
+storage/discovery_results/
+*.log
