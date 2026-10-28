@@ -1,4 +1,4 @@
-
+# main.py
 """Run the complete ADLC multi-source Discovery + Architecture E2E pipeline."""
 
 import argparse
@@ -35,7 +35,9 @@ def run_command(command: list[str], patterns: list[str]) -> tuple[int, str]:
     """Run a subprocess, print useful matching lines, and return all output."""
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    
     print(f"  • Running: {' '.join(command)}")
 
     process = subprocess.Popen(
@@ -158,6 +160,7 @@ def main() -> int:
 
     print(
         """
+  
   Fresh run:
 
   Clear DB + Sync State
@@ -170,13 +173,22 @@ def main() -> int:
            ↓
     Common Substrate
            ↓
-   Discovery Agent
+      Discovery Agent
            ↓
  Candidate Work Items + Patterns
            ↓
  Architecture Discovery Agent
            ↓
- Architecture Blueprints
+   Architecture Blueprints
+           ↓
+    Spec Synthesizer Agent
+           ↓
+    Generated Specifications
+           ↓
+   Estimation & Risk Agent
+           ↓
+ Effort Estimates + Risk Register
+
 """
     )
 
@@ -466,6 +478,76 @@ def main() -> int:
     else:
         print("\n  ✓ Architecture Discovery Agent completed")
 
+    
+    # STEP 7 — Spec Synthesizer Agent
+    stage(7, "SPEC SYNTHESIZER AGENT")
+
+    spec_code, spec_output = run_command(
+        [
+            sys.executable,
+            "-m",
+            "agents.spec.spec_synthesizer_agent",
+            "--project-id",
+            args.project_id,
+        ],
+        [
+            r"Spec package built",
+            r"Package contains",
+            r"Created/updated story",
+            r"Spec Synthesizer complete",
+            r"Marked \d+ old stories",
+            r"ERROR",
+            r"WARNING",
+        ],
+    )
+
+    if spec_code != 0:
+        print("\n✗ E2E flow stopped at Spec Synthesizer.")
+        return spec_code
+
+    print("\n  ✓ Spec Synthesizer completed")
+
+    # STEP 8 — Estimation & Risk Agent
+    stage(8, "ESTIMATION & RISK AGENT")
+
+    estimation_code, estimation_output = run_command(
+        [
+            sys.executable,
+            "run_estimation_risk.py",
+            "--project-id",
+            args.project_id,
+        ],
+        [
+            r"Stories found",
+            r"Persisted estimation artifact",
+            r"Estimation result",
+            r"Total expected effort",
+            r"Stories requiring review",
+            r"Risks identified",
+        ],
+    )
+
+    if estimation_code != 0:
+        print("\n✗ E2E flow stopped at Estimation & Risk Agent.")
+        return estimation_code
+
+    print("\n  ✓ Estimation & Risk Agent completed")
+
+    # Extract estimation summary for the final report.
+    total_effort = extract(
+        r"Total expected effort:\s*([\d.]+)\s*person-hours",
+        estimation_output,
+    )
+    stories_requiring_review = extract(
+        r"Stories requiring review:\s*(\d+)",
+        estimation_output,
+    )
+    risks_identified = extract(
+        r"Risks identified:\s*(\d+)",
+        estimation_output,
+    )
+
+
     # FINAL SUMMARY
     header("FULL MULTI-SOURCE E2E FLOW COMPLETED", "─")
 
@@ -481,9 +563,15 @@ def main() -> int:
   ✓ Candidate Work Items ({cwi_count})
   ✓ Discovery patterns ({pattern_count})
   {'⚠' if partial_architecture else '✓'} Architecture blueprints stored ({blueprints_stored})
+  ✓ Spec Synthesizer completed
+  ✓ Estimation & Risk Agent completed
   • Architecture CWI failures: {len(failed_cwi_lines)}
   • Blueprints needing review: {review_required_count}
+  • Total expected effort: {total_effort} person-hours
+  • Stories requiring review: {stories_requiring_review}
+  • Risks identified: {risks_identified}
 
+ 
   End-to-end:
 
   Jira ──────────────┐
@@ -499,7 +587,18 @@ def main() -> int:
                                    ↓
                       Architecture Discovery Agent
                                    ↓
-                        Architecture Blueprints
+                         Architecture Blueprints
+                                   ↓
+                         Spec Synthesizer Agent
+                                   ↓
+                      Generated Specifications
+                                   ↓
+                       Estimation & Risk Agent
+                                   ↓
+                       Project Effort Estimate
+                                   +
+                            Risk Register
+
 """
     )
 

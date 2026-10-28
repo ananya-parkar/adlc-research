@@ -88,9 +88,20 @@ def _call_groq(system_prompt, user_prompt, model, max_tokens, temperature, json_
             raise RuntimeError("GROQ_API_KEY not set in environment")
         _clients["groq"] = Groq(api_key=api_key, max_retries=SDK_MAX_RETRIES)
 
-    response = _clients["groq"].chat.completions.create(
-        **_chat_kwargs(system_prompt, user_prompt, model, max_tokens, temperature, json_mode)
+    kwargs = _chat_kwargs(
+        system_prompt,
+        user_prompt,
+        model,
+        max_tokens,
+        temperature,
+        json_mode,
     )
+
+    # GPT-OSS reasoning consumes output tokens even when only JSON is needed.
+    if model.startswith("openai/gpt-oss"):
+        kwargs["reasoning_effort"] = "low"
+
+    response = _clients["groq"].chat.completions.create(**kwargs)
     choice = response.choices[0]
     return choice.message.content or "", choice.finish_reason == "length"
 
