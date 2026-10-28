@@ -550,16 +550,33 @@ def build_spec_package(
                 WHERE artifact_type = %s {pfilter}""", [SOURCE_TYPE, *pparams])
             source_rows = cur.fetchall()
 
-            cur.execute(f"""
-                SELECT content, metadata FROM artifacts
-                WHERE artifact_type = %s AND COALESCE(metadata->>'lifecycle','active') = 'active' {pfilter}""",
-                        [BLUEPRINT_TYPE, *pparams])
+            cur.execute("""
+                SELECT content, metadata
+                FROM artifacts
+                WHERE artifact_type = %s
+                  AND COALESCE(metadata->>'lifecycle', 'active') = 'active'
+            """, [BLUEPRINT_TYPE])
             blueprint_rows = cur.fetchall()
 
             cur.execute("""
-                SELECT content, metadata FROM artifacts
-                WHERE artifact_type = %s AND source_ref = %s ORDER BY updated_at DESC LIMIT 1""",
-                        [BASELINE_TYPE, f"architecture-baseline:{project_key}"])
+                SELECT content, metadata, source_ref
+                FROM artifacts
+                WHERE artifact_type = %s
+                AND COALESCE(metadata->>'lifecycle', 'active') = 'active'
+                AND (
+                    source_ref = %s
+                    OR metadata->>'project_id' = %s
+                )
+                ORDER BY
+                CASE WHEN source_ref = %s THEN 0 ELSE 1 END,
+                updated_at DESC
+                LIMIT 1
+            """, [
+                BASELINE_TYPE,
+                f"architecture-baseline:{project_key}",
+                project_id or "",
+                f"architecture-baseline:{project_key}",
+            ])
             baseline_row = cur.fetchone()
 
             cur.execute(f"""
@@ -586,12 +603,24 @@ def build_spec_package(
             "content": content or "",
         }
 
-    # ---- blueprints / baseline / existing stories -----------------------------------
-    blueprints = {}
-    for content, meta in blueprint_rows:
-        meta = _decode(meta)
-        if meta.get("cwi_artifact_id"):
-            blueprints[str(meta["cwi_artifact_id"])] = {
+        # ---- blueprints -----------------------------------------------------------------
+        blueprints = {}
+        project_cwi_ids = {str(row[0]) for row in cwi_rows}
+
+        for content, meta in blueprint_rows:
+            meta = _decode(meta)
+            cwi_artifact_id = meta.get("cwi_artifact_id")
+
+            if not cwi_artifact_id:
+                continue
+
+            cwi_artifact_id = str(cwi_artifact_id)
+
+            # Only attach blueprints to CWIs in this project's package.
+            if cwi_artifact_id not in project_cwi_ids:
+                continue
+
+            blueprints[cwi_artifact_id] = {
                 "fingerprint": meta.get("fingerprint"),
                 **_slim_blueprint(_decode(content)),
             }
@@ -707,4 +736,185 @@ def build_spec_package(
     }
     path = PACKAGE_DIR / "spec_synthesizer_package.json"
     path.write_text(json.dumps(package, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    return path
+
+
+# ===========================================================================
+# Estimation & Risk Agent package
+# ===========================================================================
+
+def build_estimation_risk_package(
+    project_id: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> Path:
+    """
+    Build an estimation package from active Spec stories and related
+    Architecture artifacts.
+
+    Spec stories are the primary estimation unit. Architecture context
+    is attached where available to help assess implementation effort
+    and technical risks.
+    """
+    PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
+    project_key = project_id or "all"
+    pfilter = "AND metadata->>'project_id' = %s" if project_id else ""
+    params = [project_id] if project_id else []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # 1. Active Spec stories
+            cur.execute(
+                f"""
+                SELECT artifact_id, title, content, source_id,
+                       source_ref, metadata, updated_at
+                FROM artifacts
+                WHERE artifact_type = %s
+                  AND COALESCE(metadata->>'lifecycle', 'active') = 'active'
+                  {pfilter}
+                ORDER BY title
+                """,
+                [STORY_TYPE, *params],
+            )
+            story_rows = cur.fetchall()
+
+            # 2. Active architecture blueprints
+            cur.execute(
+                f"""
+                SELECT artifact_id, content, metadata, updated_at
+                FROM artifacts
+                WHERE artifact_type = %s
+                  AND COALESCE(metadata->>'lifecycle', 'active') = 'active'
+                  {pfilter}
+                ORDER BY updated_at DESC
+                """,
+                [BLUEPRINT_TYPE, *params],
+            )
+            blueprint_rows = cur.fetchall()
+
+            # 3. Project architecture baseline
+            cur.execute(
+                """
+                SELECT artifact_id, content, metadata, updated_at
+                FROM artifacts
+                WHERE artifact_type = %s
+                  AND source_ref = %s
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                [BASELINE_TYPE, f"architecture-baseline:{project_key}"],
+            )
+            baseline_row = cur.fetchone()
+
+    blueprints = {}
+    for artifact_id, content, metadata, updated_at in blueprint_rows:
+        meta = _decode(metadata)
+        cwi_artifact_id = meta.get("cwi_artifact_id")
+        if not cwi_artifact_id:
+            continue
+
+        blueprints[str(cwi_artifact_id)] = {
+            "artifact_id": str(artifact_id),
+            "fingerprint": meta.get("fingerprint"),
+            "blueprint": _decode(content),
+            "updated_at": updated_at.isoformat() if updated_at else None,
+        }
+
+    baseline = None
+    if baseline_row:
+        baseline = {
+            "artifact_id": str(baseline_row[0]),
+            "baseline": _decode(baseline_row[1]),
+            "metadata": _decode(baseline_row[2]),
+            "updated_at": (
+                baseline_row[3].isoformat()
+                if baseline_row[3]
+                else None
+            ),
+        }
+
+    stories = []
+    for artifact_id, title, content, source_id, source_ref, metadata, updated_at in story_rows:
+        meta = _decode(metadata)
+        cwi_artifact_id = meta.get("cwi_artifact_id")
+
+        stories.append({
+            "work_item_id": str(artifact_id),
+            "artifact_id": str(artifact_id),
+            "title": title,
+            "content": content or "",
+            "source_id": str(source_id) if source_id else None,
+            "source_ref": source_ref,
+            "metadata": meta,
+            "cwi_artifact_id": (
+                str(cwi_artifact_id) if cwi_artifact_id else None
+            ),
+            "architecture": blueprints.get(str(cwi_artifact_id)),
+            "acceptance_criteria": (
+                meta.get("acceptance_criteria")
+                or meta.get("acceptanceCriteria")
+                or []
+            ),
+            "dependencies": meta.get("dependencies") or [],
+            "open_questions": meta.get("open_questions") or [],
+            "updated_at": updated_at.isoformat() if updated_at else None,
+        })
+
+    if limit is not None:
+        stories = stories[:limit]
+
+    # Include a stable fingerprint of the selected estimation inputs.
+    input_fingerprint = _fingerprint(
+        project_id,
+        [
+            (
+                s["artifact_id"],
+                s["updated_at"],
+                s["cwi_artifact_id"],
+            )
+            for s in stories
+        ],
+        [
+            (
+                key,
+                value.get("fingerprint"),
+                value.get("updated_at"),
+            )
+            for key, value in sorted(blueprints.items())
+        ],
+        baseline,
+    )
+
+    package = {
+        "package": {
+            "package_type": "agent_context",
+            "package_version": "1.0",
+            "target_agent": "planning.estimation_risk_agent",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "project_id": project_id,
+            "input_fingerprint": input_fingerprint,
+        },
+        "context": {
+            "project_id": project_id,
+            "project_key": project_key,
+            "stories": stories,
+            "architecture_baseline": baseline,
+            "counts": {
+                "stories": len(stories),
+                "with_architecture": sum(
+                    1 for story in stories if story["architecture"]
+                ),
+            },
+        },
+    }
+
+    path = PACKAGE_DIR / "estimation_risk_package.json"
+    path.write_text(
+        json.dumps(
+            package,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
     return path

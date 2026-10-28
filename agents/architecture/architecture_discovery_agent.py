@@ -249,6 +249,7 @@ def store_baseline(record: dict, ctx: dict) -> str:
         content_override=json.dumps(b, ensure_ascii=False),
         extra_metadata={
             "lifecycle": "active",
+            "project_id": ctx["project_id"],
             "origin": record["origin"],
             "fingerprint": record["fingerprint"],
             "component_count": len(b["components"]),
@@ -381,6 +382,7 @@ def store_blueprint(bp: dict, cwi: dict, fingerprint: str, project_id: Optional[
         content_override=json.dumps(bp, ensure_ascii=False),
         extra_metadata={
             "lifecycle": "active",
+            "project_id": project_id,
             "cwi_artifact_id": cwi["artifact_id"],
             "cwi_id": cwi.get("cwi_id"),
             "mode": bp["mode"],
