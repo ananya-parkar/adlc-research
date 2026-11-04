@@ -9,5 +9,5 @@ storage/packages/
 storage/architecture_results/
 storage/discovery_results/
 *.log
-
+storage/priority_results/
 storage/spec_results/

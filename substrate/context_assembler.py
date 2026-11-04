@@ -918,3 +918,182 @@ def build_estimation_risk_package(
         encoding="utf-8",
     )
     return path
+# ===========================================================================
+# Priority Agent package
+# PASTE THIS WHOLE BLOCK AT THE END OF substrate/context_assembler.py
+# (it reuses _decode, _fingerprint, STORY_TYPE, SOURCE_TYPE, PACKAGE_DIR, get_connection)
+# ===========================================================================
+ESTIMATION_TYPE = "estimation_risk"
+PRIORITY_TYPE = "priority_backlog"
+
+
+def _estimation_payload(content: Any, metadata: Any) -> dict:
+    """The estimation result may live in content or in metadata — accept either."""
+    for candidate in (_decode(content), _decode(metadata)):
+        if isinstance(candidate.get("work_item_estimates"), list):
+            return candidate
+    return {}
+
+
+def build_priority_package(project_id: Optional[str] = None) -> Path:
+    """
+    Package for the Priority Agent.
+
+    Contains, per active spec story:
+      * story facts (key it refines, kind, epic, depends_on, confidence, review flag)
+      * the Jira ticket's priority / labels / status / due date (business-value signal)
+      * its Estimation & Risk estimate (expected hours, confidence)
+    plus the project risk register, the status of every ticket key (to know which
+    dependencies are already done) and the existing priority artifact (for resume).
+    """
+    PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
+    project_key = project_id or "all"
+    pfilter = "AND metadata->>'project_id' = %s" if project_id else ""
+    pparams = [project_id] if project_id else []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT artifact_id, title, source_id, metadata, updated_at FROM artifacts
+                WHERE artifact_type = %s AND COALESCE(metadata->>'lifecycle','active') = 'active' {pfilter}
+                ORDER BY title""", [STORY_TYPE, *pparams])
+            story_rows = cur.fetchall()
+
+            cur.execute(f"""
+                SELECT source_ref, title, metadata FROM artifacts
+                WHERE artifact_type = %s {pfilter}""", [SOURCE_TYPE, *pparams])
+            ticket_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT artifact_id, content, metadata, updated_at FROM artifacts
+                WHERE artifact_type = %s ORDER BY updated_at DESC""", [ESTIMATION_TYPE])
+            estimation_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT artifact_id, metadata FROM artifacts
+                WHERE artifact_type = %s AND source_ref = %s
+                ORDER BY updated_at DESC LIMIT 1""", [PRIORITY_TYPE, f"priority-backlog:{project_key}"])
+            priority_row = cur.fetchone()
+
+    # ---- Jira tickets: business signals + status of every key ----------------------
+    tickets: Dict[str, dict] = {}
+    for sref, title, meta in ticket_rows:
+        meta = _decode(meta)
+        if not sref:
+            continue
+        priority = meta.get("priority")
+        if isinstance(priority, dict):
+            priority = priority.get("name")
+        tickets[sref] = {
+            "title": title,
+            "priority": priority,
+            "labels": meta.get("labels") or [],
+            "status": meta.get("status"),
+            "issue_type": meta.get("issue_type"),
+            "due_date": meta.get("due_date"),
+        }
+
+    # ---- latest estimation for this project (DB first, then the local result file) ---
+    estimation, est_source = None, None
+    for aid, content, meta, updated in estimation_rows:
+        payload = _estimation_payload(content, meta)
+        pid = payload.get("project_id") or _decode(meta).get("project_id")
+        if payload and (project_id is None or pid == project_id):
+            estimation = {**payload, "artifact_id": str(aid),
+                          "updated_at": updated.isoformat() if updated else None}
+            est_source = "db"
+            break
+    if estimation is None:
+        result_file = PACKAGE_DIR / f"estimation_risk_result_{project_key}.json"
+        if result_file.exists():
+            payload = _estimation_payload(result_file.read_text(encoding="utf-8"), None)
+            if payload:
+                estimation = {**payload, "artifact_id": None, "updated_at": None}
+                est_source = f"file:{result_file.name}"
+
+    estimates = {}
+    risks = []
+    if estimation:
+        for e in estimation.get("work_item_estimates") or []:
+            if e.get("work_item_id"):
+                estimates[str(e["work_item_id"])] = {
+                    k: e.get(k) for k in ("expected_hours", "low_hours", "high_hours", "most_likely_hours",
+                                          "confidence", "complexity", "needs_review", "review_reasons")
+                }
+        risks = [
+            {k: r.get(k) for k in ("risk_id", "category", "description", "likelihood", "impact",
+                                   "affected_work_items")}
+            for r in estimation.get("risk_register") or []
+        ]
+
+    # ---- stories ----------------------------------------------------------------------
+    stories = []
+    for aid, title, sid, meta, updated in story_rows:
+        meta = _decode(meta)
+        key = meta.get("refines")
+        stories.append({
+            "work_item_id": str(aid),
+            "key": key,
+            "title": title,
+            "kind": meta.get("kind"),
+            "epic_ref": meta.get("epic_ref"),
+            "epic_title": meta.get("epic_title"),
+            "cwi_artifact_id": meta.get("cwi_artifact_id"),
+            "source_id": str(sid) if sid else None,
+            "depends_on": meta.get("depends_on") or [],
+            "story_confidence": meta.get("confidence"),
+            "story_needs_review": meta.get("needs_review"),
+            "open_question_count": len(meta.get("open_questions") or []),
+            "components": meta.get("components") or [],
+            "ticket": tickets.get(key) if key else None,
+            "estimate": estimates.get(str(aid)),
+            "updated_at": updated.isoformat() if updated else None,
+        })
+
+    existing = None
+    if priority_row:
+        pmeta = _decode(priority_row[1])
+        existing = {"artifact_id": str(priority_row[0]), "fingerprint": pmeta.get("fingerprint")}
+
+    input_fingerprint = _fingerprint(
+        project_id,
+        [(s["work_item_id"], s["updated_at"], s["depends_on"], (s["ticket"] or {}).get("priority"),
+          (s["ticket"] or {}).get("labels"), s["estimate"]) for s in stories],
+        risks,
+        sorted((k, v["status"]) for k, v in tickets.items()),
+    )
+
+    package = {
+        "package": {
+            "package_type": "agent_context",
+            "package_version": "1.0",
+            "target_agent": "planning.priority_agent",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "project_id": project_id,
+            "input_fingerprint": input_fingerprint,
+        },
+        "context": {
+            "project_id": project_id,
+            "project_key": project_key,
+            "input_fingerprint": input_fingerprint,
+            "stories": stories,
+            "risk_register": risks,
+            "ticket_status": {k: v["status"] for k, v in tickets.items()},
+            "estimation": {
+                "source": est_source,
+                "artifact_id": (estimation or {}).get("artifact_id"),
+                "source_fingerprint": (estimation or {}).get("source_fingerprint"),
+                "created_at": (estimation or {}).get("created_at"),
+            },
+            "existing_priority": existing,
+            "counts": {
+                "stories": len(stories),
+                "with_estimate": sum(1 for s in stories if s["estimate"]),
+                "with_jira_priority": sum(1 for s in stories if (s["ticket"] or {}).get("priority")),
+                "risks": len(risks),
+            },
+        },
+    }
+    path = PACKAGE_DIR / "priority_package.json"
+    path.write_text(json.dumps(package, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    return path
