@@ -160,46 +160,25 @@ def main() -> int:
 
     print(
         """
-  
-  Fresh run:
+  ADLC Pipeline Run:
 
-  Clear DB + Sync State
-           ↓
-       Jira FULL
-           ↓
-    Confluence FULL
-           ↓
-      DOCX / File
-           ↓
-    Common Substrate
-           ↓
-      Discovery Agent
-           ↓
- Candidate Work Items + Patterns
-           ↓
- Architecture Discovery Agent
-           ↓
-   Architecture Blueprints
-           ↓
-    Spec Synthesizer Agent
-           ↓
-    Generated Specifications
-           ↓
-   Estimation & Risk Agent
-           ↓
- Effort Estimates + Risk Register
+Preserve Existing State
+         ↓
+Jira + Confluence + DOCX Ingestion
+         ↓
+Discovery → Architecture → Specifications
+         ↓
+Estimation & Risk → Priority Agent
+         ↓
+PO Human Review Gate
 
 """
     )
 
-    # STEP 1 — Reset
-    stage(1, "RESET TO A FRESH STATE")
-
-    if not clear_database():
-        print("\n✗ Could not clear PostgreSQL data. Stopping.")
-        return 1
-
-    clear_local_state()
+    # STEP 1 — PRESERVE EXISTING STATE
+    stage(1, "PRESERVE EXISTING STATE")
+    print("\nExisting PostgreSQL database and local state will be preserved.")
+    print("No automatic reset will be performed.")
 
     # STEP 2 — Jira
     stage(2, "JIRA FULL INGESTION")
@@ -547,13 +526,67 @@ def main() -> int:
         estimation_output,
     )
 
+    # STEP 9 — Priority Agent
+    stage(9, "PRIORITY AGENT")
+
+    priority_code, priority_output = run_command(
+        [
+            sys.executable,
+            "-m",
+            "agents.priority.priority_agent",
+            "--project-id",
+            args.project_id,
+        ],
+        [
+            r"Priority package built",
+            r"PRIORITIZED BACKLOG",
+            r"Stored priority_backlog artifact",
+            r"Backlog is current",
+            r"Priority Agent complete",
+            r"ERROR",
+            r"WARNING",
+        ],
+    )
+
+    # Exit code 3 means ranking was stored, but LLM rationales
+    # used the template fallback because of quota limits.
+    if priority_code not in (0, 3):
+        print("\n✗ E2E flow stopped at Priority Agent.")
+        return priority_code
+
+    print("\n  ✓ Priority Agent completed")
+
+    
+    # STEP 10 — PO REVIEW GATE
+    stage(10, "PRODUCT OWNER REVIEW GATE")
+
+    print("  • Starting interactive PO review...")
+
+    review_process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "agents.po_review.po_review_gate",
+            "--project-id",
+            args.project_id,
+        ],
+        cwd=ROOT,
+    )
+
+    review_code = review_process.returncode
+
+    if review_code != 0:
+        print("\n✗ PO Review Gate did not complete.")
+        return review_code
+
+    print("\n  ✓ PO Review Gate completed")
 
     # FINAL SUMMARY
     header("FULL MULTI-SOURCE E2E FLOW COMPLETED", "─")
 
     print(
         f"""
-  ✓ Fresh PostgreSQL state
+  ✓ Existing PostgreSQL state preserved
   ✓ Jira FULL ingestion ({jira_fetched} issues fetched)
   ✓ Confluence FULL ingestion
   ✓ DOCX ingestion ({file_path.name})
@@ -565,6 +598,9 @@ def main() -> int:
   {'⚠' if partial_architecture else '✓'} Architecture blueprints stored ({blueprints_stored})
   ✓ Spec Synthesizer completed
   ✓ Estimation & Risk Agent completed
+  ✓ Priority Agent completed
+  ✓ Product Owner Review Gate completed
+
   • Architecture CWI failures: {len(failed_cwi_lines)}
   • Blueprints needing review: {review_required_count}
   • Total expected effort: {total_effort} person-hours
@@ -597,8 +633,15 @@ def main() -> int:
                                    ↓
                        Project Effort Estimate
                                    +
-                            Risk Register
-
+                             Risk Register
+                                   ↓
+                             Priority Agent
+                                   ↓
+                       Ranked Priority Backlog
+                                   ↓
+                        PO Human Review Gate
+                                   ↓
+                     Approved / Rejected / Changes Requested
 """
     )
 

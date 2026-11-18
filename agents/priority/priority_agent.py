@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
@@ -197,27 +198,58 @@ def backlog_text(result: dict) -> str:
     return "\n".join(lines)
 
 
+
 def store_backlog(result: dict, ctx: dict, fingerprint: str) -> str:
-    source_id = next((s["source_id"] for s in ctx["stories"] if s.get("source_id")), None)
+    source_id = next(
+        (s["source_id"] for s in ctx["stories"] if s.get("source_id")),
+        None,
+    )
+
     if not source_id:
         raise ValueError("No source_id on any story — cannot store the backlog")
+
     project_key = ctx["project_key"]
+
+    # Every generated backlog gets a unique source_ref.
+    # This prevents an automated run from overwriting a PO-reviewed artifact.
+    version_id = uuid.uuid4().hex
+    backlog_source_ref = f"priority-backlog:{project_key}:{version_id}"
+
     aid = upsert_artifact(
-        cwi={"title": f"Prioritized backlog — {project_key}", "source_refs": [f"priority-backlog:{project_key}"]},
+        cwi={
+            "title": f"Prioritized backlog — {project_key}",
+            "source_refs": [backlog_source_ref],
+        },
         source_id=source_id,
         artifact_type=PRIORITY_TYPE,
         content_override=backlog_text(result),
-        extra_metadata={**result, "lifecycle": "active", "fingerprint": fingerprint},
+        extra_metadata={
+            **result,
+            "lifecycle": "active",
+            "fingerprint": fingerprint,
+            "review_status": "proposed",
+            "needs_review": True,
+        },
         project_id=ctx["project_id"],
     )
-    for it in result["ranked_items"] + result["unranked_or_blocked_items"]:
-        record_provenance(artifact_id=aid, source_id=source_id, source_ref=it["work_item_id"],
-                          extraction_method="priority_agent")
-    if ctx["estimation"].get("artifact_id"):
-        record_provenance(artifact_id=aid, source_id=source_id, source_ref=ctx["estimation"]["artifact_id"],
-                          extraction_method="priority_agent_estimation")
-    return aid
 
+    for it in result["ranked_items"] + result["unranked_or_blocked_items"]:
+        record_provenance(
+            artifact_id=aid,
+            source_id=source_id,
+            source_ref=it["work_item_id"],
+            extraction_method="priority_agent",
+        )
+
+    if ctx["estimation"].get("artifact_id"):
+        record_provenance(
+            artifact_id=aid,
+            source_id=source_id,
+            source_ref=ctx["estimation"]["artifact_id"],
+            extraction_method="priority_agent_estimation",
+        )
+
+    return aid
 
 def print_report(result: dict):
     print("\n" + "=" * 92)
